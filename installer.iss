@@ -44,9 +44,9 @@
 #endif
 
 ; Portable-режим: iscc /dPORTABLE installer.iss
-#ifndef PORTABLE
-  #define PORTABLE
-#endif
+; ВАЖНО: PORTABLE по умолчанию НЕ определяется. Обычная компиляция (F9) без
+; /dPORTABLE собирает установщик ZapretGUI-Setup-<версия>.exe; portable-сборка
+; получается только при явной передаче параметра /dPORTABLE.
 
 [Setup]
 ; AppId — «личность» установки. МЕНЯТЬ ЕГО НЕЛЬЗЯ между версиями: по нему
@@ -64,10 +64,13 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=Output
+; Имя файла собирается сложением строк: внутри #define подстановка {#...} не
+; раскрывается (препроцессор оставляет её литералом), поэтому версию берём
+; напрямую из символа MyAppVersion.
 #ifdef PORTABLE
-  #define OutputBase "ZapretGUI-Portable-{#MyAppVersion}"
+  #define OutputBase "ZapretGUI-Portable-" + MyAppVersion
 #else
-  #define OutputBase "ZapretGUI-Setup-{#MyAppVersion}"
+  #define OutputBase "ZapretGUI-Setup-" + MyAppVersion
 #endif
 OutputBaseFilename={#OutputBase}
 Compression=lzma2

@@ -1,0 +1,16 @@
+venv/
+build/
+dist/
+Output/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.spec.bak
+.pi.*
+.hs-*
+.venv/
+logs/
+config.ini
+portable.flag
+.vscode/

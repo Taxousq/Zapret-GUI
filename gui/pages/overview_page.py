@@ -50,11 +50,9 @@ from config import (
     STRATEGIES_PAGE_INDEX,
     TESTING_PAGE_INDEX,
     UPDATE_PAGE_INDEX,
-    tester_script,
 )
 from core.ping_history import PingHistory
 from core.service_manager import ServiceState
-from core.strategy_tester import tester_available
 from gui.icons import make_pixmap
 from gui.pages.base import Page, WindowApi
 from gui.theme import Theme
@@ -331,7 +329,7 @@ class OverviewPage(Page):
         self.test_all_button = self._tile_button(
             "Тестировать все",
             "primary",
-            "Протестировать все стратегии встроенным тестером запрета",
+            "Перебрать все стратегии своим тестером (3-5 минут)",
         )
         self.test_all_button.clicked.connect(lambda: self._quick("test_all"))
 
@@ -363,21 +361,21 @@ class OverviewPage(Page):
 
         body.addStretch(1)
 
-        self.test_all_button.setEnabled(self._tester_available())
+        self.test_all_button.setEnabled(self._zapret_available())
 
     # ------------------------------------------------------------------
     #  Вспомогательное
     # ------------------------------------------------------------------
-    def _tester_available(self) -> bool:
-        """Есть ли тестер запрета в папке, выбранной в настройках.
+    def _zapret_available(self) -> bool:
+        """Найдена ли папка запрета: без неё тестирование недоступно.
 
-        Путь берётся у главного окна: он хранит его в настройках и меняет
-        при смене папки запрета.
+        Путь берётся у главного окна: он хранит его в настройках и меняет при
+        смене папки запрета.
         """
-        zapret_path = getattr(self.window, "zapret_path", None)
-        if zapret_path is None:
-            return tester_available()
-        return tester_available(tester_script(zapret_path))
+        checker = getattr(self.window, "zapret_available", None)
+        if callable(checker):
+            return bool(checker())
+        return getattr(self.window, "zapret_path", None) is not None
 
     # ------------------------------------------------------------------
     #  Плитка 4: график пинга
@@ -717,11 +715,11 @@ class OverviewPage(Page):
 
     def _quick(self, action: str) -> None:
         """Быстрое действие: проверяет окружение и отдаёт работу окну."""
-        if action == "test_all" and not self._tester_available():
+        if action == "test_all" and not self._zapret_available():
             QMessageBox.information(
                 self,
                 "Тестирование стратегий",
-                "Встроенный тестер запрета не найден, тестирование недоступно.\n\n"
+                "Запрет не найден, тестирование недоступно.\n\n"
                 "Укажите папку запрета в разделе «Настройки».",
             )
             return

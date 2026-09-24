@@ -256,8 +256,9 @@ CHECK_SITES: tuple[tuple[str, str], ...] = (
     ("Google", "https://www.google.com/"),
 )
 
-#: Таймаут на один сайт (секунды).
-CHECK_TIMEOUT = 5.0
+#: Таймаут на один сайт (секунды). 10 с: часть сайтов (Telegram) отвечает
+#: дольше пяти секунд, и проверка ложно показывала таймаут.
+CHECK_TIMEOUT = 10.0
 #: Сколько сайтов проверять одновременно.
 CHECK_WORKERS = 5
 #: User-Agent «как Chrome» — иначе часть сайтов отдаёт заглушки.
@@ -265,6 +266,12 @@ CHECK_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
+#: Дополнительные заголовки «как браузер»: без них сайты чаще отдают 403
+#: или заглушку, и проверка доступности теряет смысл.
+CHECK_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+}
 
 # ---------------------------------------------------------------------------
 #  Обновления с GitHub
@@ -454,7 +461,7 @@ TEST_MODE_ALL = "1"
 #: Пункт меню «Selected configs».
 TEST_MODE_SELECTED = "2"
 
-#: Регулярные выражения для разбора консольного вывода тестера (WCAG-текст).
+#: Регулярные выражения для разбора консольного вывода тестера.
 #: Строка аналитики в блоке ``=== ANALYTICS ===``: тестер печатает её через
 #: ``$config.PadRight($maxConfigLen)``, поэтому у самой длинной стратегии
 #: двоеточие идёт сразу за именем файла::
@@ -464,7 +471,7 @@ TEST_MODE_SELECTED = "2"
 #:     general (ALT11).bat : OK:  17, FAIL:   9, UNSUP:   0, BLOCKED:   0
 #:
 #: Поэтому строка аналитики разбирается как «имя файла» + пары «метрика: число»
-#: (см. parse_analytics и parse_bare_analytics в core/strategy_tester.py).
+#: (см. parse_analytics и parse_profile_analytics в core/strategy_tester.py).
 TEST_ANALYTICS_RE = (
     r"^(?P<config>.+?)\s*:\s*(?P<body>"
     r"(?:OK|HTTP OK|ERR|ERROR|FAIL|UNSUP|UNSUPPORTED|BLOCKED|LIKELY_BLOCKED|Ping OK|PingFail|Fail)"

@@ -118,10 +118,15 @@ class TestingPage(Page):
         self.add_card(self.card)
         self.finish_layout()
 
-        # Поток тестера не трогает виджеты напрямую: его колбэки испускают
-        # сигналы окна, а Qt доставляет их в главный поток. Строки консоли
-        # копятся в списке и разбираются таймером: перерисовка консоли на
-        # каждую строку заметно тормозит окно.
+        # Тестер — QObject: его сигналы испускаются из фонового потока и через
+        # очередь Qt приходят сюда, в главный поток, поэтому виджеты можно
+        # обновлять прямо в слотах. Поток тестера не трогает виджеты напрямую.
+        # Строки консоли копятся в списке и разбираются таймером: перерисовка
+        # консоли на каждую строку заметно тормозит окно.
+        self.tester.tester_output.connect(self.on_tester_line)
+        self.tester.tester_progress.connect(self.on_tester_progress)
+        self.tester.tester_result.connect(self.on_tester_result)
+
         self._test_flush_timer = QTimer(self)
         self._test_flush_timer.setInterval(150)
         self._test_flush_timer.timeout.connect(self._flush_test_console)

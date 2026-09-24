@@ -239,8 +239,8 @@ class ZapretLocator:
     def download_from_github(
         self,
         target_dir: Path,
-        progress_callback: ProgressCallback | None = None,
-        status_callback: StatusCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+        on_status: StatusCallback | None = None,
     ) -> tuple[bool, str]:
         """Скачивает последний релиз запрета и распаковывает его в ``target_dir``.
 
@@ -250,9 +250,14 @@ class ZapretLocator:
         пользователь сам запускает ``service.bat`` от администратора.
 
         :param target_dir: куда распаковать запрет (папка создаётся);
-        :param progress_callback: ``(скачано, всего)`` — для прогресс-бара;
-        :param status_callback: текстовые стадии («Скачивание архива...»).
+        :param on_progress: ``(скачано, всего)`` — для прогресс-бара;
+        :param on_status: текстовые стадии («Скачивание архива...»).
         :returns: ``(успех, сообщение)``; исключения не выбрасываются.
+
+        Имена параметров совпадают с :meth:`core.updater.Updater.download` и
+        :meth:`core.updater.Updater.download_and_install`, а также с тем, что
+        передают мастер первого запуска и страница настроек
+        (``on_progress=``/``on_status=``).
         """
         from core.updater import Updater, UpdaterError
 
@@ -260,8 +265,8 @@ class ZapretLocator:
         workdir: Path | None = None
 
         def status(text: str) -> None:
-            if status_callback is not None:
-                status_callback(text)
+            if on_status is not None:
+                on_status(text)
 
         try:
             if not self._target_ready(target):
@@ -277,7 +282,7 @@ class ZapretLocator:
 
             status(f"Скачивание архива {info.asset_name}...")
             workdir = Path(tempfile.mkdtemp(prefix="zapret-download-"))
-            archive = updater.download(info, on_progress=progress_callback, workdir=workdir)
+            archive = updater.download(info, on_progress=on_progress, workdir=workdir)
 
             status("Распаковка архива...")
             extracted = updater.extract(archive, workdir / "extracted")
@@ -368,6 +373,16 @@ class ZapretLocator:
                         target.rmdir()
                     source.rename(target)
                     return True, "Файлы перенесены."
+                # Приёмник к этому моменту уже создан и пуст, поэтому
+                # ``shutil.move`` перенёс бы папку релиза **внутрь** него —
+                # получился бы лишний уровень вложения
+                # (``Запрет\\zapret-1.9.2\\bin``), и :meth:`is_valid` не нашёл бы
+                # запрет. Убираем пустой приёмник: перенос становится
+                # переименованием, и содержимое релиза оказывается прямо в
+                # папке запрета. Если папку успели наполнить — ``rmdir``
+                # не сработает, и ниже сработает копирование «поверх».
+                if target.exists():
+                    target.rmdir()
                 shutil.move(str(source), str(target))
                 return True, "Файлы перенесены."
             except (OSError, shutil.Error) as exc:

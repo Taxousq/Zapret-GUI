@@ -64,6 +64,24 @@ RATE_LIMIT_TEXT = "Превышен лимит запросов GitHub, попр
 #: Текст ошибки, когда GitHub недоступен.
 NETWORK_TEXT = "Не удалось проверить обновления. Проверьте подключение к интернету."
 
+#: Маска запасного имени установщика: ``ZapretGUI.<версия>.exe``, где версия —
+#: только цифры и точки (например ``ZapretGUI.1.0.1.exe``). Маска строгая:
+#: ``ZapretGUI-Portable-1.0.1.exe``, ``ZapretGUI.debug.exe`` и прочие имена под
+#: неё не подходят. Нужна на случай, если в релиз залит установщик под таким
+#: именем (каноническое — ``ZapretGUI-Setup-<версия>.exe``).
+_FALLBACK_ASSET_RE = re.compile(r"^zapretgui\.\d+(?:\.\d+)*\.exe$", re.IGNORECASE)
+
+
+def _is_installer_asset(name: str) -> bool:
+    """Канонический установщик: в имени есть ``Setup`` и оно кончается на ``.exe``."""
+    text = str(name or "").strip().lower()
+    return APP_UPDATE_ASSET_HINT in text and text.endswith(".exe")
+
+
+def _is_fallback_installer_asset(name: str) -> bool:
+    """Запасной установщик: ровно ``ZapretGUI.<цифры и точки>.exe``."""
+    return bool(_FALLBACK_ASSET_RE.match(str(name or "").strip()))
+
 
 class AppUpdaterError(RuntimeError):
     """Понятная пользователю ошибка проверки/скачивания обновления."""
@@ -249,21 +267,24 @@ class AppUpdater:
             raise AppUpdaterError("GitHub вернул ответ в неизвестном формате.") from exc
 
         assets = data.get("assets") or []
+        # Сначала канонический установщик ZapretGUI-Setup-*.exe; если его в
+        # релизе нет — запасной вариант ZapretGUI.<версия>.exe (например
+        # ZapretGUI.1.0.1.exe). Приоритет всегда у Setup-варианта.
         asset = next(
-            (
-                item
-                for item in assets
-                if APP_UPDATE_ASSET_HINT in str(item.get("name", "")).lower()
-                and str(item.get("name", "")).lower().endswith(".exe")
-            ),
+            (item for item in assets if _is_installer_asset(item.get("name"))),
             None,
         )
+        if asset is None:
+            asset = next(
+                (item for item in assets if _is_fallback_installer_asset(item.get("name"))),
+                None,
+            )
         tag = str(data.get("tag_name") or "")
         if asset is None:
             names = ", ".join(str(item.get("name")) for item in assets) or "нет"
             log.warning(
-                "В релизе %s нет установщика ZapretGUI-Setup-*.exe (файлы: %s) — "
-                "обновление не предлагается",
+                "В релизе %s нет установщика ZapretGUI-Setup-*.exe или "
+                "ZapretGUI.<версия>.exe (файлы: %s) — обновление не предлагается",
                 tag or "?",
                 names,
             )

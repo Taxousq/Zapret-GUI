@@ -160,6 +160,15 @@ class StrategyParser:
         log.info("Найдено стратегий: %d (%s)", len(strategies), self.zapret_path)
         return strategies
 
+    def find_strategies(self) -> list[Strategy]:
+        """Все доступные стратегии (псевдоним :meth:`parse`).
+
+        Имя нужно тестеру стратегий (``core.strategy_tester``): там список
+        читается именно этим методом, а ``parse`` остаётся для остальных
+        разделов приложения.
+        """
+        return self.parse()
+
     def find(self, name: str) -> Strategy | None:
         """Находит стратегию по имени (без учёта регистра)."""
         if not name:

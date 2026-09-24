@@ -527,11 +527,16 @@ class ServiceManager:
         return True, "Служба перезапущена."
 
     # -- текущая стратегия -------------------------------------------------
-    def get_installed_strategy(self) -> str | None:
+    def get_current_strategy(self) -> str | None:
         """Имя стратегии, с которой установлена служба (из реестра).
 
         service.bat пишет в параметр ``zapret-discord-youtube`` имя файла
         стратегии без расширения, например ``general (ALT11)``.
+
+        Именно этот метод читает активную стратегию тестер
+        (``core.strategy_tester``): в режиме «Проверить текущую» он проверяет
+        её, не переключая службу, а в режиме «Тестировать все» — запоминает,
+        чтобы вернуть после теста.
         """
         code, output = self._run(
             [
@@ -552,6 +557,10 @@ class ServiceManager:
         if not match:
             return None
         return match.group(1).strip() or None
+
+    def get_installed_strategy(self) -> str | None:
+        """Прежнее имя :meth:`get_current_strategy` — оставлено для совместимости."""
+        return self.get_current_strategy()
 
     # -- установка / удаление ---------------------------------------------
     def _stop_if_running(self) -> None:

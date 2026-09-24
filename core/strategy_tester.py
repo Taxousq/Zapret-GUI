@@ -26,8 +26,13 @@ stdin. Последовательность ответов такая::
 * цвета консоли в PowerShell 5.1 через ``Write-Host`` в поток не попадают,
   но ANSI-последовательности всё равно вырезаются.
 
-Модуль намеренно не зависит от Qt: строки отдаются обычными колбэками,
-а в GUI их переносит ``gui.widgets.Worker``.
+:class:`StrategyTester` — ``QObject`` с сигналами ``tester_output(str)``,
+``tester_progress(object)``, ``tester_result(object)`` и
+``tester_finished(object)``: страница тестирования подключается к ним сама.
+Тест выполняется в фоновом потоке (``gui.widgets.Worker``), а сигналы Qt
+доставляет в главный поток, поэтому интерфейс не подвисает. Колбэки
+``on_line``/``on_progress``/``on_result`` из конструктора оставлены для
+совместимости и вызываются вместе с сигналами.
 """
 
 from __future__ import annotations
@@ -42,6 +47,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
+
+from PyQt6.QtCore import QObject, pyqtSignal
 
 from config import (
     ANSI_RE,
@@ -554,17 +561,29 @@ class TestError(RuntimeError):
     """Тестер не удалось запустить или он неожиданно прервался."""
 
 
-class StrategyTester:
+class StrategyTester(QObject):
     """Запускает ``utils\\test zapret.ps1`` и разбирает его вывод.
 
     Все методы рассчитаны на вызов из одного фонового потока
     (``gui.widgets.Worker``); единственное исключение — :meth:`stop`, который
     можно звать из главного потока: он только снимает процесс и не ждёт.
 
+    :param zapret_path: папка запрета (``None`` — значение по умолчанию).
+    :param script: путь к ``test zapret.ps1`` (``None`` — посчитать от папки).
     :param on_line: вызывается для каждой строки вывода (уже очищенной).
     :param on_progress: вызывается при смене текущего конфига.
     :param on_result: вызывается, когда для стратегии появился результат.
+    :param parent: родитель QObject (обычно не нужен).
     """
+
+    #: Очищенная строка вывода тестера — показывается в консоли страницы.
+    tester_output = pyqtSignal(str)
+    #: Прогресс теста (:class:`TestProgress`).
+    tester_progress = pyqtSignal(object)
+    #: Результат по одной стратегии (:class:`StrategyTestResult`).
+    tester_result = pyqtSignal(object)
+    #: Итог запуска (:class:`TestReport`).
+    tester_finished = pyqtSignal(object)
 
     def __init__(
         self,
@@ -573,7 +592,9 @@ class StrategyTester:
         on_line: Callable[[str], None] | None = None,
         on_progress: Callable[[TestProgress], None] | None = None,
         on_result: Callable[[StrategyTestResult], None] | None = None,
+        parent: QObject | None = None,
     ) -> None:
+        super().__init__(parent)
         self.zapret_path = Path(zapret_path) if zapret_path else Path(ZAPRET_PATH)
         # Тестер лежит внутри папки запрета: путь берём от неё, а не из
         # константы TEST_SCRIPT — в сборке PyInstaller она указывала во
@@ -819,6 +840,8 @@ class StrategyTester:
                 self._on_line(line)
             except Exception:  # noqa: BLE001 — сбой колбэка не должен ронять тест
                 log.exception("Ошибка в обработчике строки тестера")
+        # Сигнал испускается из потока теста: Qt доставит его в главный поток.
+        self.tester_output.emit(line)
 
         if self._error_marker(line):
             return False
@@ -851,7 +874,10 @@ class StrategyTester:
             if parsed.index is not None:
                 self._items[parsed.index] = parsed.config
         elif parsed.kind == "analytics":
-            if parsed.metrics:
+            # Строка подробного отчёта по цели («YouTube Web  HTTP:OK  |
+            # Ping: 24 ms») тоже содержит «метрика: число» и выглядит как
+            # аналитика — см. _is_config_result.
+            if parsed.metrics and self._is_config_result(parsed.config, line):
                 self._emit_result(parsed.config, parsed.metrics, line)
         elif parsed.kind == "best":
             self._best = parsed.config or None
@@ -868,6 +894,22 @@ class StrategyTester:
             self._error_lines.append(stripped)
             return True
         return False
+
+    @staticmethod
+    def _is_config_result(config: str, line: str) -> bool:
+        """Результат по стратегии это или строка подробного отчёта по цели.
+
+        Тестер печатает аналитику с именем стратегии — ``$file.Name``, то есть
+        ``general (ALT11).bat``. А строки по целям начинаются с имени цели
+        (``  YouTube Web   HTTP:OK   | Ping: 24 ms``, ``  Cloudflare DNS
+        1.1.1.1   Ping: 24 ms``) и тоже содержат «метрика: число». Без этой
+        проверки в таблицу попадали бы строки целей с нулевыми OK/FAIL.
+        """
+        if config.strip().lower().endswith(".bat"):
+            return True
+        # Запасной вариант — строгий формат строки аналитики: имя, двоеточие и
+        # только пары «метрика: число» (см. TEST_ANALYTICS_RE в config.py).
+        return bool(_ANALYTICS_RE.match(line))
 
     def _answer_menu(self, line: str) -> None:
         """Досылает ответы по заголовкам меню, если они попали в вывод.
@@ -984,13 +1026,14 @@ class StrategyTester:
         return False
 
     def _emit_progress(self) -> None:
-        if self._on_progress is None:
-            return
         progress = TestProgress(
             current=self._current_index,
             total=self._total,
             config=self._current_file,
         )
+        self.tester_progress.emit(progress)
+        if self._on_progress is None:
+            return
         try:
             self._on_progress(progress)
         except Exception:  # noqa: BLE001
@@ -1009,6 +1052,9 @@ class StrategyTester:
         if metrics is not None:
             result.metrics = metrics
             result.raw = raw
+        # Сигнал испускается на каждое обновление строки стратегии: страница
+        # перерисовывает ячейки таблицы прямо по нему.
+        self.tester_result.emit(result)
         if self._on_result is not None:
             try:
                 self._on_result(result)
@@ -1057,6 +1103,7 @@ class StrategyTester:
             report.best_config,
             report.stopped,
         )
+        self.tester_finished.emit(report)
         return report
 
     def stop(self) -> None:

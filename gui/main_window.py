@@ -101,7 +101,7 @@ from core.service_manager import (
     is_admin,
 )
 from core.strategy_parser import StrategyParser
-from core.strategy_tester import StrategyTester, tester_available
+from core.strategy_tester import StrategyTester
 from core.updater import Updater
 from core.warp_manager import WarpManager
 from core.warp_updater import WarpUpdater
@@ -420,12 +420,6 @@ class MainWindow(QMainWindow):
     update_progress = pyqtSignal(int, int)
     #: Текстовая стадия обновления.
     update_status = pyqtSignal(str)
-    #: Прогресс тестирования стратегий (из потока тестера).
-    tester_progress = pyqtSignal(object)
-    #: Результат по одной стратегии (из потока тестера).
-    tester_result = pyqtSignal(object)
-    #: Строка консольного вывода тестера (из потока чтения).
-    tester_output = pyqtSignal(str)
     #: Запрос фоновой задачи из чужого потока: (fn, args, ok, err, kwargs).
     _async_request = pyqtSignal(object)
 
@@ -469,16 +463,10 @@ class MainWindow(QMainWindow):
         self.warp_manager = WarpManager()
         self.warp_updater = WarpUpdater()
         self.autostart = AutostartManager()
-        # Тестер запускается в отдельном потоке, поэтому его колбэки не трогают
-        # виджеты напрямую, а испускают сигналы окна: Qt доставит их в главный
-        # поток (queued connection). Сигналы соединяются со слотами страницы
-        # тестирования в _setup_tester.
-        self.tester = StrategyTester(
-            zapret_path=self.zapret_path,
-            on_line=self.tester_output.emit,
-            on_progress=self.tester_progress.emit,
-            on_result=self.tester_result.emit,
-        )
+        # Тестер стратегий — QObject с сигналами: тест идёт в отдельном потоке
+        # (его запускает страница тестирования через run_async), а сигналы Qt
+        # доставляет в главный поток. Страница подключается к ним сама.
+        self.tester = StrategyTester(zapret_path=self.zapret_path)
 
         # --- состояние ----------------------------------------------------
         self._workers: set[Worker] = set()
@@ -618,11 +606,12 @@ class MainWindow(QMainWindow):
         self.strategy_parser = StrategyParser(self.zapret_path)
         self.service_manager = ServiceManager(zapret_path=self.zapret_path)
         self.updater = Updater(target_dir=self.zapret_path)
-        self.tester.zapret_path = self.zapret_path
 
         self.strategies_page.strategy_parser = self.strategy_parser
         self.service_page.service_manager = self.service_manager
         self.testing_page.service_manager = self.service_manager
+        # Страница сама переводит тестер на новую папку (и пересоздаёт его
+        # парсер стратегий с менеджером службы).
         self.testing_page.set_zapret_path(self.zapret_path)
         self.lists_page.service_manager = self.service_manager
         self.lists_page.set_zapret_path(self.zapret_path)
@@ -795,7 +784,6 @@ class MainWindow(QMainWindow):
 
         self.strategies_page.strategies_changed.connect(self.refresh_strategies)
         self.strategies_page.service_changed.connect(self._after_service_action)
-        self.strategies_page.selection_changed.connect(self._sync_test_strategy)
         self.strategies_page.failed.connect(self.report_error)
 
         self.lists_page.status_message.connect(self._on_lists_status)
@@ -1125,16 +1113,11 @@ class MainWindow(QMainWindow):
             strategies = self.strategies_page.strategies()
             self.testing_page.set_strategies(strategies)
 
-            installed = self.service_manager.get_installed_strategy()
+            installed = self.service_manager.get_current_strategy()
             self.service_page.set_current_strategy(installed)
             self.overview_page.set_current_strategy(installed)
-            self._sync_test_strategy()
         finally:
             self._refreshing_strategies = False
-
-    def _sync_test_strategy(self) -> None:
-        """Держит список тестируемых стратегий в согласии с основным."""
-        self.testing_page.select_strategy(self.strategies_page.current_strategy())
 
     def _after_service_action(self) -> None:
         """После операции со службой обновляет её состояние и список стратегий."""
@@ -1404,23 +1387,21 @@ class MainWindow(QMainWindow):
     #  Тестирование стратегий
     # ==================================================================
     def _setup_tester(self) -> None:
-        """Подключает сигналы тестера к странице тестирования.
+        """Проверяет, что тестирование вообще возможно.
 
-        Поток тестера не трогает виджеты напрямую: его колбэки испускают
-        сигналы окна, а Qt доставляет их в главный поток (queued connection).
+        Свой тестер стратегий подключает свои сигналы сам: страница
+        тестирования слушает ``tester_output``, ``tester_progress`` и
+        ``tester_finished`` напрямую (см. :class:`gui.pages.TestingPage`).
         """
-        self.tester_progress.connect(self.testing_page.on_tester_progress)
-        self.tester_result.connect(self.testing_page.on_tester_result)
-        self.tester_output.connect(self.testing_page.on_tester_line)
-        if not tester_available(self.tester.script):
-            log.warning("Тестер запрета не найден — тестирование недоступно")
+        if not self.zapret_available():
+            log.warning("Запрет не найден — тестирование стратегий недоступно")
 
     def _on_test_started(self) -> None:
         self.status_bar_progress(True)
 
     def _on_test_finished(self) -> None:
         self.status_bar_progress(False)
-        # Тестер удаляет и ставит службу заново: плитки дашборда могли устареть.
+        # Тестер переустанавливал службу: плитки дашборда могли устареть.
         self.overview_page.refresh_tiles()
         QTimer.singleShot(600, self.refresh_strategies)
 
@@ -1521,12 +1502,14 @@ class MainWindow(QMainWindow):
         if self.update_timer.isActive():
             self.update_timer.stop()
 
-        # Незавершённый тестер снимается до ожидания потоков: иначе его поток
-        # останется ждать вывода процесса, а winws.exe — висеть в системе.
-        # Ждать его отдельно не нужно: поток тестера есть в self._workers.
+        # Незавершённый тестер снимается до ожидания потоков: если выйти сразу,
+        # служба останется с последней протестированной стратегией, а поток
+        # тестера — «живым» (Qt ругается «QThread: Destroyed while thread is
+        # still running»). Ждём его отдельно и дольше остальных задач: возврат
+        # исходной стратегии — это переустановка службы, то есть секунды.
         if self.test_busy():
             log.info("Останавливаю тестер перед выходом")
-            self.testing_page.abandon_test(wait=False)
+            self.testing_page.abandon_test(wait=True)
 
         # Ждём завершения фоновых задач, чтобы не убить поток на середине.
         for worker in list(self._workers):
