@@ -2,12 +2,13 @@
 
 Окно состоит из трёх частей:
 
-* **шапка** — название приложения, статус последней операции, индикатор
-  состояния службы, кнопка переключения темы и кнопка сворачивания в трей;
-* **боковое меню** слева (десять разделов) и **страницы** справа
+* **шапка** — название приложения, статус последней операции, кнопка
+  переключения темы и кнопка сворачивания в трей (индикатор состояния службы
+  живёт на странице «Обзор», в шапке он дублировал бы её плитку «СЛУЖБА»);
+* **боковое меню** слева (одиннадцать разделов) и **страницы** справа
   (``QStackedWidget``): «Обзор», «Служба», «Стратегии», «Списки»,
-  «Обход (WARP)», «Тестирование», «Проверка связи», «Обновление», «Логи»,
-  «Настройки»;
+  «Обход (WARP)», «TG WS Proxy», «Тестирование», «Проверка связи»,
+  «Обновление», «Логи», «Настройки»;
 * **статус-бар** — подпись сборки с копирайтом слева и версия запрета справа.
 
 When GitHub сообщает о новой версии **самого приложения**, в шапке появляется
@@ -18,8 +19,8 @@ When GitHub сообщает о новой версии **самого прил�
 
 Там же живёт проверка обновления запрета (релизы Flowseal): её результат тоже
 поднимает баннер — «Запрет и интерфейс: доступны обновления». По клику окно
-открывает раздел «Обновление», где собраны все три источника (запрет, GUI и
-Cloudflare WARP), см. :class:`gui.pages.UpdatePage`.
+открывает раздел «Обновление», где собраны все четыре источника (запрет, GUI,
+Cloudflare WARP и TG WS Proxy), см. :class:`gui.pages.UpdatePage`.
 
 Статус-бар создаётся через :meth:`QMainWindow.setStatusBar`: Qt сам резервирует
 полосу снизу, поэтому сайдбар и страницы не заезжают под неё. Статус последней
@@ -81,6 +82,7 @@ from config import (
     STATUS_POLL_INTERVAL_MS,
     STRATEGIES_PAGE_INDEX,
     TESTING_PAGE_INDEX,
+    TGWS_PAGE_INDEX,
     UPDATE_CHECK_DELAY_MS,
     UPDATE_CHECK_INTERVAL_HOURS,
     UPDATE_PAGE_INDEX,
@@ -102,6 +104,7 @@ from core.service_manager import (
 )
 from core.strategy_parser import StrategyParser
 from core.strategy_tester import StrategyTester
+from core.tgws_manager import TgwsManager
 from core.updater import Updater
 from core.warp_manager import WarpManager
 from core.warp_updater import WarpUpdater
@@ -117,13 +120,14 @@ from gui.pages import (
     SettingsPage,
     StrategiesPage,
     TestingPage,
+    TgwsPage,
     UpdatePage,
     WarpPage,
 )
 from gui.sidebar import LOGS_SECTION, OVERVIEW_SECTION, SECTIONS, Sidebar
 from gui.theme import Theme
 from gui.tray_icon import TrayIcon
-from gui.widgets import StatusIndicator, Worker
+from gui.widgets import Worker
 
 log = logging.getLogger(__name__)
 
@@ -135,7 +139,7 @@ HEALTH_SECTION = HEALTH_PAGE_INDEX
 
 #: Ширина подписи статуса операции в шапке, px. Ограничена намеренно: длинное
 #: сообщение обрезается по краю (``Header._elide_status``), а не растягивает
-#: шапку и не выдавливает индикатор службы с кнопками. Значение подобрано так,
+#: шапку и не выдавливает кнопки. Значение подобрано так,
 #: чтобы шапка целиком помещалась в минимальную ширину окна
 #: (``config.WINDOW_MIN_WIDTH``) даже с видимым индикатором прогресса.
 STATUS_TEXT_WIDTH = 170
@@ -152,7 +156,7 @@ STATUS_ERROR = "error"
 
 
 class Header(QWidget):
-    """Шапка окна: название, статус операции, служба, тема, сворачивание в трей.
+    """Шапка окна: название, статус операции, тема, сворачивание в трей.
 
     Дополнительно в шапке живёт баннер обновления приложения: строка
     «Доступна версия X → Обновить» со ссылкой. Баннер скрыт, пока обновлений
@@ -198,7 +202,7 @@ class Header(QWidget):
         top.addStretch(1)
 
         # Статус последней операции раньше жил в статус-баре; теперь он здесь,
-        # рядом с индикатором службы. Ширина фиксирована, длинный текст
+        # рядом с кнопками. Ширина фиксирована, длинный текст
         # обрезается многоточием — шапка не «разъезжается».
         self.status_label = QLabel("Готово")
         self.status_label.setObjectName("HeaderStatus")
@@ -219,9 +223,6 @@ class Header(QWidget):
         self.status_progress.setVisible(False)
         top.addWidget(self.status_progress)
 
-        self.indicator = StatusIndicator()
-        top.addWidget(self.indicator)
-
         self.theme_button = QPushButton()
         self.theme_button.setObjectName("HeaderButton")
         self.theme_button.setFixedWidth(44)
@@ -238,8 +239,8 @@ class Header(QWidget):
 
         # Баннер обновления: своя строка под верхним рядом. Скрыт по умолчанию —
         # окно выглядит как обычно, пока GitHub не сообщит о новой версии.
-        # Ссылка «Открыть» открывает раздел «Обновление», где собраны все три
-        # источника: запрет, сам GUI и Cloudflare WARP.
+        # Ссылка «Открыть» открывает раздел «Обновление», где собраны все
+        # источники: запрет, сам GUI, Cloudflare WARP и TG WS Proxy.
         self.update_banner = QWidget()
         self.update_banner.setObjectName("UpdateBanner")
         self.update_banner.setFixedHeight(UPDATE_BANNER_HEIGHT)
@@ -462,6 +463,10 @@ class MainWindow(QMainWindow):
         # осталось в разделе «Обход (WARP)» и работает через WarpManager.
         self.warp_manager = WarpManager()
         self.warp_updater = WarpUpdater()
+        # TG WS Proxy — внешнее приложение (локальный MTProto-прокси Telegram)
+        # со своим треем: экземпляр один на всё окно, его же использует карточка
+        # обновления на странице «Обновление».
+        self.tgws_manager = TgwsManager()
         self.autostart = AutostartManager()
         # Тестер стратегий — QObject с сигналами: тест идёт в отдельном потоке
         # (его запускает страница тестирования через run_async), а сигналы Qt
@@ -616,6 +621,10 @@ class MainWindow(QMainWindow):
         self.lists_page.service_manager = self.service_manager
         self.lists_page.set_zapret_path(self.zapret_path)
         self.settings_page.set_zapret_path(self.zapret_path)
+        # Страница «Обновление» тоже должна получить новый Updater: иначе её
+        # карточка «Запрет» продолжит читать версию по старому (пустому) пути
+        # и покажет «неизвестно» до перезапуска приложения.
+        self.update_page.updater = self.updater
 
         self.refresh_all()
 
@@ -633,10 +642,9 @@ class MainWindow(QMainWindow):
         self.header.theme_toggled.connect(self.on_toggle_theme)
         self.header.tray_requested.connect(self.hide_to_tray)
         # Ссылка «Открыть» в баннере шапки: показываем раздел «Обновление»,
-        # где собраны все три источника, и проверяем релизы GUI заново —
+        # где собраны все источники, и проверяем релизы GUI заново —
         # данные могли устареть, пока приложение работало.
         self.header.update_requested.connect(self._on_header_update_requested)
-        self.header_indicator = self.header.indicator
         #: Подпись статуса последней операции в шапке (см. Header.set_status).
         self.header_status = self.header.status_label
         root.addWidget(self.header)
@@ -670,18 +678,23 @@ class MainWindow(QMainWindow):
         # «Обход (WARP)» управляет Cloudflare WARP через warp-cli и от запрета
         # не зависит: раздел доступен даже в ограниченном режиме.
         self.warp_page = WarpPage(self)
+        # «TG WS Proxy» — тоже внешнее приложение, как и WARP: только статус и
+        # запуск exe, обновление живёт на странице «Обновление».
+        self.tgws_page = TgwsPage(self, self.tgws_manager)
         self.testing_page = TestingPage(
             self, self.service_manager, self.tester, self.zapret_path
         )
         self.health_page = HealthPage(self, self.health_checker, self.ping_history)
-        # «Обновление» — одна вкладка на три источника: запрет (Flowseal),
-        # сам GUI (установщик из релизов) и Cloudflare WARP (winget).
+        # «Обновление» — одна вкладка на четыре источника: запрет (Flowseal),
+        # сам GUI (установщик из релизов), Cloudflare WARP (winget) и
+        # TG WS Proxy (exe из релизов Flowseal).
         self.update_page = UpdatePage(
             self,
             self.updater,
             self.service_manager,
             app_updater=self.app_updater,
             warp_updater=self.warp_updater,
+            tgws_manager=self.tgws_manager,
         )
         self.logs_page = LogsPage(self)
         self.settings_page = SettingsPage(self, self.locator, self.zapret_path)
@@ -696,6 +709,7 @@ class MainWindow(QMainWindow):
             self.strategies_page,
             self.lists_page,
             self.warp_page,
+            self.tgws_page,
             self.testing_page,
             self.health_page,
             self.update_page,
@@ -726,6 +740,7 @@ class MainWindow(QMainWindow):
             STRATEGIES_PAGE_INDEX,
             LISTS_PAGE_INDEX,
             WARP_PAGE_INDEX,
+            TGWS_PAGE_INDEX,
             TESTING_PAGE_INDEX,
             HEALTH_PAGE_INDEX,
             UPDATE_PAGE_INDEX,
@@ -794,6 +809,12 @@ class MainWindow(QMainWindow):
         # запрета, поэтому service_changed здесь не нужен.
         self.warp_page.status_message.connect(self._on_lists_status)
         self.warp_page.failed.connect(self.report_error)
+
+        # «TG WS Proxy» — тоже внешнее приложение: статус и ошибки идут туда же,
+        # где и у остальных разделов (``_on_lists_status`` принимает (текст,
+        # уровень)).
+        self.tgws_page.status_message.connect(self._on_lists_status)
+        self.tgws_page.failed.connect(self.report_error)
 
         self.testing_page.test_started.connect(self._on_test_started)
         self.testing_page.test_finished.connect(self._on_test_finished)
@@ -1082,7 +1103,6 @@ class MainWindow(QMainWindow):
         state: ServiceState = status.state
         self._last_state = state
 
-        self.header_indicator.set_text(state.label, state.color)
         self.service_page.set_service_state(state)
         self.strategies_page.set_service_state(state)
         self.testing_page.set_service_state(state)
@@ -1265,7 +1285,7 @@ class MainWindow(QMainWindow):
     def _on_header_update_requested(self) -> None:
         """Клик по баннеру в шапке: открыть раздел «Обновление».
 
-        Раздел показывает версии и кнопки для всех трёх источников сразу,
+        Раздел показывает версии и кнопки для всех источников сразу,
         поэтому ничего не скачивается автоматически: пользователь сам решает,
         что обновлять. Релизы GUI проверяются заново — данные могли устареть.
         """

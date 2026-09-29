@@ -3,7 +3,7 @@
 Настройки приложения разложены по трём областям:
 
 * ``QSettings("ZapretGUI", "Paths")`` — путь к папке запрета (ключ
-  ``zapret_path``);
+  ``zapret_path``) и путь к exe TG WS Proxy (ключ ``tgws_path``);
 * ``QSettings("ZapretGUI", "Theme")`` — выбранная тема (ключ ``theme``);
 * ``QSettings("ZapretGUI", "Warp")`` — дата последней загрузки списка
   российских адресов (ключ ``last_bypass_download``);
@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 #: Организация в реестре (или в INI-файле) для всех настроек.
 SETTINGS_ORG = "ZapretGUI"
-#: Область настроек с путями (ключ ``zapret_path``).
+#: Область настроек с путями (ключи ``zapret_path`` и ``tgws_path``).
 PATHS_APP = "Paths"
 #: Область настроек с темой (ключ ``theme``).
 THEME_APP = "Theme"
@@ -45,6 +45,8 @@ WINDOW_APP = "ZapretGUI"
 
 #: Ключ с путём к папке запрета.
 ZAPRET_PATH_KEY = "zapret_path"
+#: Ключ с путём к исполняемому файлу TG WS Proxy.
+TGWS_PATH_KEY = "tgws_path"
 #: Ключ с датой последней загрузки списка российских адресов WarpBypass.
 WARP_DOWNLOAD_KEY = "last_bypass_download"
 #: Ключ «проверять обновления приложения при запуске».
@@ -70,7 +72,7 @@ def _make(application: str) -> QSettings:
 
 
 def paths_settings() -> QSettings:
-    """Настройки путей (ключ ``zapret_path``)."""
+    """Настройки путей (ключи ``zapret_path`` и ``tgws_path``)."""
     return _make(PATHS_APP)
 
 
@@ -181,6 +183,32 @@ def set_zapret_path(path: object) -> str:
         settings.sync()
     except Exception:  # noqa: BLE001 — сохранение настроек не критично
         log.exception("Не удалось сохранить путь к запрету в настройках")
+    return text
+
+
+def tgws_path() -> str:
+    """Сохранённый путь к exe TG WS Proxy. Пустая строка — настройки нет.
+
+    Путь задаётся вручную на странице «TG WS Proxy»: автопоиск ищет только
+    ``TgWsProxy*.exe``, а скачанный файл может называться иначе.
+    """
+    try:
+        value: Any = paths_settings().value(TGWS_PATH_KEY, "")
+    except Exception:  # noqa: BLE001 — настройки не должны ронять запуск
+        log.exception("Не удалось прочитать путь к TG WS Proxy из настроек")
+        return ""
+    return str(value).strip() if value is not None else ""
+
+
+def set_tgws_path(path: object) -> str:
+    """Сохраняет путь к exe TG WS Proxy и возвращает его строкой."""
+    text = str(path).strip() if path is not None else ""
+    try:
+        settings = paths_settings()
+        settings.setValue(TGWS_PATH_KEY, text)
+        settings.sync()
+    except Exception:  # noqa: BLE001 — сохранение настроек не критично
+        log.exception("Не удалось сохранить путь к TG WS Proxy в настройках")
     return text
 
 

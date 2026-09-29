@@ -27,7 +27,7 @@ LIGHT: Final[str] = "light"
 
 #: Радиус скругления карточек, px. Единственное место, где он задан:
 #: страницы и виджеты берут значение отсюда (QSS карточек собирается ниже).
-CARD_RADIUS: Final[int] = 16
+CARD_RADIUS: Final[int] = 14
 
 #: Организация и приложение в реестре для QSettings. Настройки создаются через
 #: :mod:`core.settings` (это нужно для portable-режима), а эти константы
@@ -39,99 +39,103 @@ SETTINGS_APP: Final[str] = "Theme"
 #: какая тема активна, и просто подставляет цвета по имени.
 PALETTES: dict[str, dict[str, str]] = {
     DARK: {
-        # Тёмно-синяя тема (Tailwind gray-900 и окрестности): фон — почти
-        # чёрный с холодным оттенком, карточки заметно светлее, сайдбар темнее
-        # фона. Чисто чёрных (#0d0d0d) и серых (#1a1a1a) цветов здесь нет:
-        # на них интерфейс выглядел «дёшево» и плитки сливались с фоном.
-        "background": "#111827",
-        "surface": "#1a2436",
-        "surface_alt": "#151d2e",
-        "sidebar": "#0f1729",
-        "button": "#243044",
-        "button_hover": "#2c3a52",
-        "button_pressed": "#1f2a3d",
-        "button_disabled": "#1b2432",
-        "button_disabled_text": "#5b6b80",
-        "button_disabled_border": "#253143",
-        "border": "#2a3a4f",
-        "border_strong": "#3a4a63",
-        "accent": "#4d6bfe",
-        "accent_hover": "#5f7bff",
-        "accent_pressed": "#3f59e0",
-        "accent_soft": "rgba(77, 107, 254, 0.18)",
-        "accent_disabled": "#2c3560",
-        "text": "#e5e7eb",
-        "muted": "#94a3b8",
+        # Монохром (как в референсе Happ): фон — почти чёрный, карточки на шаг
+        # светлее, сайдбар сливается с фоном. Акцент здесь не цвет, а свет:
+        # активные элементы белые, поэтому «accent_text» — чёрный (текст на
+        # белой кнопке), а семантические цвета статусов остаются цветными.
+        "background": "#0a0a0a",
+        "surface": "#141414",
+        "surface_alt": "#0f0f0f",
+        "sidebar": "#0a0a0a",
+        "button": "#1a1a1a",
+        "button_hover": "#232323",
+        "button_pressed": "#101010",
+        "button_disabled": "#141414",
+        "button_disabled_text": "#525252",
+        "button_disabled_border": "#262626",
+        "border": "#262626",
+        "border_strong": "#404040",
+        "accent": "#fafafa",
+        "accent_hover": "#ffffff",
+        "accent_pressed": "#e5e5e5",
+        "accent_soft": "rgba(250, 250, 250, 0.08)",
+        "accent_disabled": "#404040",
+        # Текст на акцентной (белой) заливке: чёрный, иначе не читается.
+        "accent_text": "#0a0a0a",
+        "text": "#fafafa",
+        "muted": "#737373",
         "success": "#22c55e",
         "success_soft": "rgba(34, 197, 94, 0.10)",
         "error": "#ef4444",
         "error_soft": "rgba(239, 68, 68, 0.10)",
         "warning": "#f59e0b",
         "warning_soft": "rgba(245, 158, 11, 0.15)",
-        # Отсутствие службы: приглушённый синевато-серый оттенок.
-        "neutral_soft": "rgba(148, 163, 184, 0.08)",
-        "danger_border": "#4c2630",
-        "danger_hover": "#2c1a20",
-        # График пинга на дашборде: линия пинга (на шаг светлее акцента —
-        # на тёмном фоне так читается лучше), метки потерь и сетка осей.
-        "chart_line": "#5f7bff",
+        # Отсутствие службы: приглушённый серый оттенок.
+        "neutral_soft": "rgba(115, 115, 115, 0.10)",
+        "danger_border": "#4c2626",
+        "danger_hover": "#2a1717",
+        # График пинга на дашборде: линия пинга светлая (на чёрном фоне так
+        # читается лучше), метки потерь — семантический красный, сетка — серая.
+        "chart_line": "#fafafa",
         "chart_loss": "#ef4444",
-        "chart_grid": "#2a3a4f",
-        "scrollbar": "#334155",
-        "scrollbar_hover": "#475569",
+        "chart_grid": "#262626",
+        "scrollbar": "#333333",
+        "scrollbar_hover": "#4d4d4d",
         "shadow": "#000000",
         # Статус-бар: фон не должен сливаться с основным фоном окна, поэтому
         # он светлее фона (как карточки) и отделён линией сверху.
-        "statusbar_bg": "#1a2436",
-        "statusbar_text": "#94a3b8",
+        "statusbar_bg": "#0f0f0f",
+        "statusbar_text": "#737373",
         # Тень карточек: читается из палитры, а не задаётся в коде виджета.
-        # На тёмно-синем фоне тень должна быть глубже, иначе карточки «висят».
-        "card_shadow_color": "rgba(0, 0, 0, 0.4)",
+        # На чёрном фоне тень должна быть глубже, иначе карточки «висят».
+        "card_shadow_color": "rgba(0, 0, 0, 0.6)",
         "card_shadow_blur": "24",
     },
     LIGHT: {
-        # «Дорогая» светлая тема: белые карточки на светло-сером фоне,
-        # мягкая серая граница и заметная, но не грубая тень.
-        "background": "#f0f2f5",
+        # Светлый монохром: белые карточки на почти белом фоне, серая граница
+        # и мягкая тень. Акцент — чёрный, поэтому «accent_text» белый.
+        "background": "#f8fafc",
         "surface": "#ffffff",
-        "surface_alt": "#f7f8fa",
+        "surface_alt": "#f1f5f9",
         "sidebar": "#ffffff",
         "button": "#ffffff",
-        "button_hover": "#eef1f8",
-        "button_pressed": "#e4e8f2",
-        "button_disabled": "#f0f0f0",
-        "button_disabled_text": "#a3a3a3",
-        "button_disabled_border": "#e0e0e0",
-        "border": "#d8dde3",
-        "border_strong": "#c2c9d2",
-        "accent": "#4d6bfe",
-        "accent_hover": "#3f59e0",
-        "accent_pressed": "#3550cc",
-        "accent_soft": "rgba(77, 107, 254, 0.08)",
-        "accent_disabled": "#b9c4f7",
-        "text": "#1a1a1a",
-        "muted": "#6b7280",
+        "button_hover": "#f1f5f9",
+        "button_pressed": "#e2e8f0",
+        "button_disabled": "#f1f5f9",
+        "button_disabled_text": "#94a3b8",
+        "button_disabled_border": "#e2e8f0",
+        "border": "#e2e8f0",
+        "border_strong": "#cbd5e1",
+        "accent": "#0a0a0a",
+        "accent_hover": "#1f1f1f",
+        "accent_pressed": "#000000",
+        "accent_soft": "rgba(10, 10, 10, 0.06)",
+        "accent_disabled": "#cbd5e1",
+        # Текст на акцентной (чёрной) заливке: белый, иначе не читается.
+        "accent_text": "#ffffff",
+        "text": "#0a0a0a",
+        "muted": "#64748b",
         "success": "#16a34a",
         "success_soft": "rgba(22, 163, 74, 0.08)",
         "error": "#dc2626",
         "error_soft": "rgba(220, 38, 38, 0.08)",
         "warning": "#d97706",
         "warning_soft": "rgba(217, 119, 6, 0.12)",
-        "neutral_soft": "rgba(136, 136, 136, 0.08)",
+        "neutral_soft": "rgba(100, 116, 139, 0.08)",
         "danger_border": "#f0c2c2",
         "danger_hover": "#fdecec",
-        # График пинга на дашборде: на светлом фоне линии темнее акцента.
-        "chart_line": "#3f59e0",
+        # График пинга на дашборде: на светлом фоне линия тёмная.
+        "chart_line": "#0a0a0a",
         "chart_loss": "#dc2626",
-        "chart_grid": "#d8dde3",
-        "scrollbar": "#c4c4c4",
-        "scrollbar_hover": "#a8a8a8",
+        "chart_grid": "#e2e8f0",
+        "scrollbar": "#cbd5e1",
+        "scrollbar_hover": "#94a3b8",
         "shadow": "#000000",
-        # Статус-бар: белая полоса на светло-сером фоне окна.
+        # Статус-бар: белая полоса на светлом фоне окна.
         "statusbar_bg": "#ffffff",
-        "statusbar_text": "#6b7280",
-        "card_shadow_color": "rgba(0, 0, 0, 0.12)",
-        "card_shadow_blur": "20",
+        "statusbar_text": "#64748b",
+        "card_shadow_color": "rgba(0, 0, 0, 0.08)",
+        "card_shadow_blur": "18",
     },
 }
 
@@ -192,27 +196,35 @@ _QSS = Template(
     }
     QPushButton#NavButton {
         background-color: transparent;
-        border: none;
-        border-left: 3px solid transparent;
-        border-radius: 0;
-        padding: 10px 12px 10px 15px;
-        text-align: left;
+        border: 1.5px solid transparent;
+        border-radius: 10px;
+        padding: 0;
+        /* Квадрат под узкий сайдбар: содержимое ~44 px плюс рамка 1.5 px с
+           каждой стороны даёт почти 48×48, при этом кнопка помещается в
+           полосу шириной 64 px с отступами 8 px. */
+        min-width: 44px;
+        min-height: 44px;
         font-size: 13px;
         color: $text;
     }
     QPushButton#NavButton:hover {
         background-color: $accent_soft;
     }
+    /* Активный раздел — только контурная рамка (без заливки): так пункт
+       читается как «выбран» и не спорит с монохромной палитрой. */
     QPushButton#NavButton[active="true"] {
+        background-color: transparent;
+        border: 1.5px solid $accent;
+    }
+    /* Наведение на активный пункт: рамка остаётся, добавляется мягкая
+       подложка — иначе активная иконка выглядела бы «мёртвой» под курсором. */
+    QPushButton#NavButton[active="true"]:hover {
         background-color: $accent_soft;
-        border-left: 3px solid $accent;
-        color: $accent;
-        font-weight: 600;
     }
     QPushButton#HeaderButton {
         background-color: transparent;
         border: 1px solid $border;
-        border-radius: 8px;
+        border-radius: 10px;
         padding: 4px 10px;
         font-size: 14px;
         color: $text;
@@ -263,7 +275,7 @@ _QSS = Template(
         background-color: $button;
         color: $text;
         border: 1px solid $border;
-        border-radius: 8px;
+        border-radius: 10px;
         padding: 7px 14px;
     }
     QPushButton:hover {
@@ -281,7 +293,7 @@ _QSS = Template(
     QPushButton[variant="primary"] {
         background-color: $accent;
         border-color: $accent;
-        color: #ffffff;
+        color: $accent_text;
         font-weight: 600;
     }
     QPushButton[variant="primary"]:hover {
@@ -294,7 +306,7 @@ _QSS = Template(
     QPushButton[variant="primary"]:disabled {
         background-color: $accent_disabled;
         border-color: $accent_disabled;
-        color: #f0f0f0;
+        color: $accent_text;
     }
     QPushButton[variant="danger"] {
         color: $error;
@@ -378,7 +390,7 @@ _QSS = Template(
         border: 1px solid $border;
         color: $text;
         selection-background-color: $accent;
-        selection-color: #ffffff;
+        selection-color: $accent_text;
         outline: none;
         padding: 4px;
     }
@@ -392,7 +404,7 @@ _QSS = Template(
         gridline-color: $border;
         color: $text;
         selection-background-color: $accent;
-        selection-color: #ffffff;
+        selection-color: $accent_text;
         outline: none;
     }
     QTableWidget::item, QTableView::item {
@@ -400,7 +412,7 @@ _QSS = Template(
     }
     QTableWidget::item:selected, QTableView::item:selected {
         background-color: $accent;
-        color: #ffffff;
+        color: $accent_text;
     }
     QHeaderView {
         background-color: $surface;
@@ -429,6 +441,7 @@ _QSS = Template(
         font-family: "Cascadia Mono", "Consolas", monospace;
         font-size: 12px;
         selection-background-color: $accent;
+        selection-color: $accent_text;
     }
     QProgressBar {
         background-color: $button;
@@ -476,7 +489,7 @@ _QSS = Template(
     }
     QMenu::item:selected {
         background-color: $accent;
-        color: #ffffff;
+        color: $accent_text;
     }
     QMenu::separator {
         height: 1px;

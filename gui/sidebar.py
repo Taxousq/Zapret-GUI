@@ -1,9 +1,10 @@
 """Боковое меню приложения.
 
-Слева — список разделов. Каждый пункт — обычная ``QPushButton`` с
-``checkable=True``: активный подсвечивается акцентным цветом, остальные
-полупрозрачны. Иконки рисуются кодом (см. :mod:`gui.icons`), поэтому при
-смене темы они перекрашиваются вместе с текстом.
+Слева — узкая полоса иконок разделов. Каждый пункт — обычная ``QPushButton``
+с ``checkable=True``: активный обведён контурной рамкой и получает акцентную
+иконку, остальные приглушены. Иконки рисуются кодом (см. :mod:`gui.icons`),
+поэтому при смене темы они перекрашиваются вместе с интерфейсом. Подписи
+разделов не рисуются: их заменяют всплывающие подсказки.
 
 Виджет ничего не знает о страницах: он только сообщает индекс выбранного
 раздела сигналом :attr:`Sidebar.section_changed`.
@@ -16,7 +17,6 @@ import logging
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
-    QLabel,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -38,9 +38,10 @@ SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("Стратегии", "arrows", "Список стратегий обхода и установка выбранной"),
     ("Списки", "list", "Пользовательские списки запрета: домены и исключения"),
     ("Обход (WARP)", "globe", "Cloudflare WARP: статус, подключение, режим, исключения"),
+    ("TG WS Proxy", "telegram", "Локальный MTProto-прокси для Telegram (Flowseal)"),
     ("Тестирование", "flask", "Тестирование стратегий встроенным тестером"),
     ("Проверка связи", "magnifier", "Проверка доступности сайтов"),
-    ("Обновление", "download", "Обновление запрета, интерфейса и Cloudflare WARP"),
+    ("Обновление", "download", "Обновление запрета, интерфейса, WARP и TG WS Proxy"),
     ("Логи", "document", "Журнал событий Windows о службе zapret"),
     ("Настройки", "gear", "Папка запрета: изменить, проверить, скачать заново"),
 )
@@ -53,10 +54,12 @@ SERVICE_SECTION = 1
 LISTS_SECTION = 3
 #: Индекс раздела «Обход (WARP)» (управление Cloudflare WARP).
 WARP_SECTION = 4
+#: Индекс раздела «TG WS Proxy» (локальный MTProto-прокси для Telegram).
+TGWS_SECTION = 5
 #: Индекс раздела «Логи» (по нему открывается страница из кнопки и трея).
-LOGS_SECTION = 8
+LOGS_SECTION = 9
 #: Индекс раздела «Настройки» (папка запрета).
-SETTINGS_SECTION = 9
+SETTINGS_SECTION = 10
 
 
 class Sidebar(QWidget):
@@ -83,13 +86,11 @@ class Sidebar(QWidget):
         self._current = -1
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 14, 0, 10)
-        layout.setSpacing(4)
-
-        caption = QLabel("РАЗДЕЛЫ")
-        caption.setObjectName("SidebarCaption")
-        caption.setContentsMargins(18, 0, 0, 6)
-        layout.addWidget(caption)
+        # Отступы под ширину 64 px: 8 px по бокам оставляют кнопке-квадрату
+        # ~48 px. Заголовка «РАЗДЕЛЫ» здесь больше нет — узкая полоса иконок
+        # обходится без подписи, а название раздела показывает tooltip.
+        layout.setContentsMargins(8, 12, 8, 10)
+        layout.setSpacing(6)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
@@ -113,7 +114,10 @@ class Sidebar(QWidget):
     #  Построение
     # ------------------------------------------------------------------
     def _make_button(self, title: str, icon_name: str, tooltip: str, index: int) -> QPushButton:
-        button = QPushButton(title)
+        # Текст не задаём: в узком сайдбаре подпись всё равно не помещается, а
+        # зарезервированное под неё место ломает квадратную форму кнопки.
+        # ``title`` остаётся в сигнатуре: он пригодится, если подписи вернут.
+        button = QPushButton("")
         button.setObjectName("NavButton")
         button.setCheckable(True)
         button.setAutoExclusive(False)  # эксклюзивностью управляет QButtonGroup

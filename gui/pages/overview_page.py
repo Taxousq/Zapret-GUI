@@ -3,9 +3,13 @@
 Первый экран приложения: сводка по системе четырьмя плитками.
 
 * **Служба** — большая плитка на всю ширину: крупная иконка, состояние
-  («Работает» / «Остановлена» / «Не установлена»), подсказка и кнопки
-  управления. Фон плитки меняется по состоянию: зелёный оттенок при работе,
-  красный при остановке, серый, если служба не установлена.
+  («Работает» / «Остановлена» / «Не установлена») и кнопки управления.
+  Главная (primary) кнопка меняется по состоянию службы, чтобы иерархия
+  действий оставалась очевидной: при работающей службе это «Остановить»,
+  при остановленной — «Запустить», у неустановленной — «Перезапустить»
+  (в этом случае окно подставляет установку). Фон плитки меняется по
+  состоянию: зелёный оттенок при работе, красный при остановке, серый,
+  если служба не установлена.
 * **Текущая стратегия** — название стратегии, с которой установлена служба,
   и кнопка «Сменить» (переход в раздел «Стратегии»).
 * **Быстрые действия** — тестирование всех стратегий, проверка связи и
@@ -16,10 +20,16 @@
   связи. Точек ровно столько, сколько было замеров: один раунд проверки даёт
   по точке на каждый сайт, поэтому линия появляется сразу после первого
   нажатия «Проверить связь». Ось Y зафиксирована на 0–500 мс — шкала не
-  «прыгает» от замера к замеру. История живёт в
+  «прыгает» от замера к замеру. Пока данных нет, вместо графика показывается
+  компактная заглушка (текст + кнопка «Проверить связь»), а не пустая область
+  в 260 px. История живёт в
   :class:`core.ping_history.PingHistory`, а график перерисовывается **только
   по кнопке** «Обновить график»: проверка идёт в фоне, и график, меняющийся
   сам по себе, только отвлекал бы.
+* **Поддержать** — самая нижняя узкая карточка: короткий текст и кнопка,
+  открывающая мини-диалог с адресами BTC и TON
+  (:class:`gui.dialogs.support_dialog.SupportDialog`). Реквизитов страница не
+  хранит — они лежат в самом диалоге, чтобы не расползались по коду.
 
 Навигацию страница выполняет сигналами (:attr:`OverviewPage.navigate_to` и
 :attr:`OverviewPage.quick_action`), а не прямым переключением стека: страницы
@@ -53,9 +63,10 @@ from config import (
 )
 from core.ping_history import PingHistory
 from core.service_manager import ServiceState
+from gui.dialogs.support_dialog import SupportDialog
 from gui.icons import make_pixmap
 from gui.pages.base import Page, WindowApi
-from gui.theme import Theme
+from gui.theme import Theme, repolish
 from gui.widgets import ModernCard
 
 # График пинга требует отдельного пакета PyQt6-Charts. Его отсутствие не
@@ -98,6 +109,11 @@ QUICK_TILE_SPACING = 8
 #: Минимальная высота области графика пинга, px.
 CHART_MIN_HEIGHT = 260
 
+#: Минимальная высота заглушки вместо графика, px. Заглушка — это строка
+#: текста и кнопка «Проверить связь»: держать под неё высоту графика (260 px)
+#: незачем, карточка «ПИНГ» раздувалась бы на пустом месте.
+CHART_PLACEHOLDER_MIN_HEIGHT = 80
+
 #: Сколько последних точек рисует график (история хранится целиком).
 CHART_POINT_LIMIT = 1000
 
@@ -121,21 +137,17 @@ CHART_Y_MAX = 500.0
 #: Полуширина окна оси X, если точек мало, секунды.
 CHART_MIN_SPAN_SEC = 30
 
-#: Подпись вместо графика, когда проверок ещё не было.
-CHART_EMPTY_TEXT = "Нет данных. Нажмите «Проверить связь» на странице «Проверка связи»."
+#: Подпись вместо графика, когда проверок ещё не было. Короткая: действие
+#: предлагает кнопка рядом, а не текст.
+CHART_EMPTY_TEXT = "Проверок ещё не было."
 
 #: Подпись вместо графика, когда не установлен PyQt6-Charts.
 CHART_MISSING_TEXT = (
     "График недоступен: установите PyQt6-Charts (pip install PyQt6-Charts)."
 )
 
-#: Подсказка под состоянием службы: что значит текущее состояние.
-_STATE_HINTS: dict[ServiceState, str] = {
-    ServiceState.RUNNING: "Обход блокировок активен. Служба запущена автоматически.",
-    ServiceState.STOPPED: "Служба установлена, но не запущена — обход не работает.",
-    ServiceState.NOT_INSTALLED: "Служба не установлена. Выберите стратегию и установите её.",
-    ServiceState.UNKNOWN: "Состояние службы проверяется...",
-}
+#: Текст карточки «Поддержать».
+SUPPORT_TEXT = "Нравится приложение? Поддержите разработку."
 
 #: Ключи темы с фоном плитки состояния (серый — общий для обеих тем).
 _STATE_BG_KEYS: dict[ServiceState, str] = {
@@ -231,6 +243,10 @@ class OverviewPage(Page):
         self._build_chart_tile()
         self.add_card(self.chart_card)
 
+        # Карточка «Поддержать» — в самом низу страницы, под «ПИНГ».
+        self._build_support_tile()
+        self.add_card(self.support_card)
+
     @staticmethod
     def _make_compact(card: ModernCard) -> None:
         """Делает плитку компактной: без пустой шапки, отступы 12 px, шаг 8 px.
@@ -266,18 +282,14 @@ class OverviewPage(Page):
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._add_centered(body, self.status_label)
 
-        self.status_hint = QLabel(_STATE_HINTS[ServiceState.UNKNOWN])
-        self.status_hint.setObjectName("Muted")
-        self.status_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_hint.setWordWrap(True)
-        body.addWidget(self.status_hint)
-
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         buttons.addStretch(1)
 
+        # Вариант оформления здесь не задаётся: главную кнопку выбирает
+        # update_buttons() по состоянию службы (см. _set_variant).
         self.start_button = self._tile_button(
-            "Запустить", "primary", "Запустить службу zapret"
+            "Запустить", None, "Запустить службу zapret"
         )
         self.start_button.clicked.connect(lambda: self._service("start"))
         self.stop_button = self._tile_button("Остановить", None, "Остановить службу zapret")
@@ -328,7 +340,7 @@ class OverviewPage(Page):
 
         self.test_all_button = self._tile_button(
             "Тестировать все",
-            "primary",
+            None,
             "Перебрать все стратегии своим тестером (3-5 минут)",
         )
         self.test_all_button.clicked.connect(lambda: self._quick("test_all"))
@@ -401,14 +413,37 @@ class OverviewPage(Page):
         self.refresh_chart_button.clicked.connect(self.refresh_chart)
         self.chart_card.add_header_widget(self.refresh_chart_button)
 
-        # Подпись вместо графика: пока проверок не было (или не установлен
-        # PyQt6-Charts) области графика показывать нечего.
-        self.chart_placeholder = QLabel("")
-        self.chart_placeholder.setObjectName("Muted")
-        self.chart_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.chart_placeholder.setWordWrap(True)
-        self.chart_placeholder.setMinimumHeight(CHART_MIN_HEIGHT)
-        self.chart_card.body.addWidget(self.chart_placeholder)
+        # Заглушка вместо графика: пока проверок не было (или не установлен
+        # PyQt6-Charts) области графика показывать нечего. Это не одиночная
+        # подпись, а контейнер «текст + кнопка»: пока данных нет, запустить
+        # проверку связи можно прямо отсюда, не уходя на другую страницу.
+        self.chart_placeholder_container = QWidget()
+        placeholder_layout = QVBoxLayout(self.chart_placeholder_container)
+        placeholder_layout.setContentsMargins(0, 0, 0, 0)
+        placeholder_layout.setSpacing(8)
+
+        self.chart_placeholder_label = QLabel("")
+        self.chart_placeholder_label.setObjectName("Muted")
+        self.chart_placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chart_placeholder_label.setWordWrap(True)
+        placeholder_layout.addWidget(self.chart_placeholder_label)
+
+        # Кнопка проверки связи: то же действие, что и на плитке «Быстрые
+        # действия» — отдельного сигнала для неё не заводим.
+        self.chart_placeholder_button = Page.make_button(
+            "Проверить связь",
+            None,
+            tooltip="Проверить доступность сайтов из списка проверки",
+        )
+        self.chart_placeholder_button.clicked.connect(
+            lambda: self._quick("check_health")
+        )
+        placeholder_layout.addWidget(
+            self.chart_placeholder_button, 0, Qt.AlignmentFlag.AlignHCenter
+        )
+
+        self.chart_placeholder_container.setMinimumHeight(CHART_PLACEHOLDER_MIN_HEIGHT)
+        self.chart_card.body.addWidget(self.chart_placeholder_container)
 
         if CHARTS_AVAILABLE:
             self._build_chart()
@@ -459,6 +494,41 @@ class OverviewPage(Page):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self.chart_card.body.addWidget(self.chart_view)
+
+    # ------------------------------------------------------------------
+    #  Плитка 5: поддержать разработку
+    # ------------------------------------------------------------------
+    def _build_support_tile(self) -> None:
+        """Карточка «Поддержать»: короткий текст и кнопка с адресами для донатов.
+
+        Реквизиты здесь не хранятся: их показывает
+        :class:`gui.dialogs.support_dialog.SupportDialog`. Карточка узкая —
+        одна строка текста и кнопка справа, чтобы не отбирать высоту у графика
+        пинга над ней.
+        """
+        self.support_card = ModernCard("")
+        self._make_compact(self.support_card)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        text = QLabel(SUPPORT_TEXT)
+        text.setObjectName("Muted")
+        text.setWordWrap(True)
+        row.addWidget(text, 1)
+
+        # Вариант оформления намеренно не задан: главная (primary) кнопка на
+        # дашборде одна — это действие службы, и вторая «главная» кнопка
+        # спорила бы с ней за внимание.
+        self.support_button = Page.make_button(
+            "Поддержать",
+            None,
+            tooltip="Показать адреса BTC и TON для поддержки разработки",
+        )
+        self.support_button.clicked.connect(self.on_support)
+        row.addWidget(self.support_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.support_card.add_layout(row)
 
     # ------------------------------------------------------------------
     #  Данные графика
@@ -666,15 +736,21 @@ class OverviewPage(Page):
     #  Состояния карточки графика
     # ------------------------------------------------------------------
     def _set_placeholder(self, text: str) -> None:
-        """Показывает подпись вместо графика (нет данных / нет PyQt6-Charts)."""
-        self.chart_placeholder.setText(text)
-        self.chart_placeholder.setVisible(True)
+        """Показывает заглушку вместо графика (нет данных / нет PyQt6-Charts).
+
+        Кнопка «Проверить связь» показывается только тогда, когда проверка
+        действительно может помочь: без PyQt6-Charts графика не будет, и
+        предлагать действие незачем.
+        """
+        self.chart_placeholder_label.setText(text)
+        self.chart_placeholder_button.setVisible(CHARTS_AVAILABLE)
+        self.chart_placeholder_container.setVisible(True)
         if self.chart_view is not None:
             self.chart_view.setVisible(False)
 
     def _show_chart(self) -> None:
-        """Показывает область графика, прячет подпись."""
-        self.chart_placeholder.setVisible(False)
+        """Показывает область графика, прячет заглушку вместе с кнопкой."""
+        self.chart_placeholder_container.setVisible(False)
         if self.chart_view is not None:
             self.chart_view.setVisible(True)
 
@@ -725,16 +801,51 @@ class OverviewPage(Page):
             return
         self.quick_action.emit(action)
 
+    def on_support(self) -> None:
+        """Открывает мини-окно с адресами для поддержки (BTC и TON).
+
+        Диалог модальный и живёт до закрытия: нить работы окна он не трогает
+        (копирование адреса — мгновенная операция), поэтому результат ему не
+        нужен, а ``exec`` просто ждёт кнопку «Закрыть».
+        """
+        dialog = SupportDialog(parent=self)
+        dialog.exec()
+
     def set_busy(self, busy: bool) -> None:
         """Блокирует кнопки плитки службы, пока операция выполняется."""
         self._busy = busy
         self.update_buttons()
 
+    @staticmethod
+    def _set_variant(button: QPushButton, variant: str | None) -> None:
+        """Меняет вариант оформления кнопки (QSS-селектор ``[variant=...]``).
+
+        Qt не перекрашивает виджет при изменении динамического свойства,
+        поэтому стиль пересобирается через :func:`gui.theme.repolish`. Пустая
+        строка (``variant`` снят) с селектором ``[variant="primary"]`` не
+        совпадает — кнопка становится обычной. Если вариант не изменился,
+        ничего не делаем: ``update_buttons`` вызывается часто.
+        """
+        current = button.property("variant") or ""
+        new = variant or ""
+        if current == new:
+            return
+        button.setProperty("variant", new)
+        repolish(button)
+
     def update_buttons(self) -> None:
-        """Включает только те кнопки, которые имеют смысл для состояния."""
+        """Включает нужные кнопки и выбирает главную под текущее состояние.
+
+        Главная (primary) кнопка — наиболее вероятное следующее действие:
+        у работающей службы это «Остановить», у остановленной — «Запустить»,
+        у неустановленной — «Перезапустить» (окно подставит установку). Пока
+        состояние неизвестно или идёт операция, главной кнопки нет: подсказать
+        действие наугад хуже, чем не подсказывать вовсе.
+        """
         if self._busy:
             for button in (self.start_button, self.stop_button, self.restart_button):
                 button.setEnabled(False)
+                self._set_variant(button, None)
             return
 
         running = self._state.is_running
@@ -743,6 +854,20 @@ class OverviewPage(Page):
         # Для неустановленной службы «Перезапустить» означает «установить»:
         # окно подставит стратегию, и кнопка остаётся активной.
         self.restart_button.setEnabled(True)
+
+        if running:
+            variants = (None, "primary", None)
+        elif self._state is ServiceState.STOPPED:
+            variants = ("primary", None, None)
+        elif self._state is ServiceState.NOT_INSTALLED:
+            variants = (None, None, "primary")
+        else:  # ServiceState.UNKNOWN — состояние ещё не определено
+            variants = (None, None, None)
+
+        for button, variant in zip(
+            (self.start_button, self.stop_button, self.restart_button), variants
+        ):
+            self._set_variant(button, variant)
 
     # ==================================================================
     #  Данные из главного окна
@@ -773,7 +898,6 @@ class OverviewPage(Page):
         self.status_card.set_accent(background)
         self.status_label.setText(state.label)
         self.status_label.setStyleSheet(f"color: {state.color};")
-        self.status_hint.setText(_STATE_HINTS.get(state, _STATE_HINTS[ServiceState.UNKNOWN]))
         self.update_buttons()
 
     def _apply_strategy(self) -> None:
@@ -810,6 +934,7 @@ class OverviewPage(Page):
             self.strategy_card,
             self.quick_card,
             self.chart_card,
+            self.support_card,
         ):
             card.refresh_theme()
         self._apply_chart_theme()
@@ -824,7 +949,7 @@ class OverviewPage(Page):
         темы приносила бы на график новые проверки в обход кнопки «Обновить
         график».
         """
-        self.chart_placeholder.setStyleSheet(f"color: {Theme.color('muted')};")
+        self.chart_placeholder_label.setStyleSheet(f"color: {Theme.color('muted')};")
         if self.chart is None:
             return
 

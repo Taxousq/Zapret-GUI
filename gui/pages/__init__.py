@@ -16,6 +16,7 @@ from gui.pages.service_page import ServicePage
 from gui.pages.settings_page import SettingsPage
 from gui.pages.strategies_page import StrategiesPage
 from gui.pages.testing_page import TestingPage
+from gui.pages.tgws_page import TgwsPage
 from gui.pages.update_page import UpdatePage
 from gui.pages.warp_page import WarpPage
 
@@ -29,6 +30,7 @@ __all__ = [
     "SettingsPage",
     "StrategiesPage",
     "TestingPage",
+    "TgwsPage",
     "UpdatePage",
     "WarpPage",
     "WindowApi",

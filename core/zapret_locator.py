@@ -5,13 +5,22 @@
 хранится в ``QSettings("ZapretGUI", "Paths")`` (ключ ``zapret_path``), но при
 первом запуске настройки ещё нет — тогда путь ищется автоматически здесь:
 
-1. ``D:\\Zapret`` — исторический путь;
-2. ``C:\\zapret``;
-3. ``zapret`` рядом с приложением (рядом с папкой проекта или с exe);
-4. ``zapret`` на одном уровне с папкой приложения;
-5. ``%USERPROFILE%\\zapret``;
-6. ``%LOCALAPPDATA%\\zapret``;
-7. ``zapret`` рядом с exe в portable-режиме (флешка).
+1. пути, переданные в конструктор (:attr:`ZapretLocator._extra`);
+2. папка службы ``zapret`` из реестра (:meth:`ZapretLocator._registry_candidates`)
+   — самый надёжный источник, если служба уже установлена;
+3. подпапки с именем на ``zapret`` в типичных родительских каталогах
+   (:meth:`ZapretLocator._mask_candidates`) — так находятся папки вида
+   ``Downloads\\zapret-discord-youtube-1.9.2``;
+4. типичные места установки (:func:`_default_candidates`): ``D:\\Zapret``,
+   ``C:\\zapret``, ``zapret`` рядом с приложением и на одном уровне с ним,
+   ``%USERPROFILE%\\zapret``, ``%LOCALAPPDATA%\\zapret``, ``Program Files``,
+   ``%USERPROFILE%\\Downloads|Desktop|Documents``, ``zapret`` в корне каждого
+   локального диска и ``zapret`` рядом с exe в portable-режиме (флешка).
+
+Этот список быстрый: он не обходит диски. Если запрет лежит в неожиданном
+месте, мастер первого запуска может запустить полный обход дисков —
+:meth:`ZapretLocator.deep_search` (только по явному нажатию кнопки «Искать
+везде», потому что операция долгая).
 
 Временные папки (``%TEMP%``, ``%LOCALAPPDATA%\\Temp``) в автопоиске не
 участвуют: запрет там никогда не устанавливается. Это важно ещё и потому, что
@@ -28,14 +37,25 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import shutil
+import string
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable, Iterable
 
+try:
+    import winreg
+except ImportError:  # pragma: no cover — не Windows (например, линтер на CI)
+    # Приложение Windows-only, но импорт модуля не должен падать: реестр —
+    # лишь один из источников кандидатов, без него автопоиск работает.
+    winreg = None  # type: ignore[assignment]
+
 from core import portable
+from core.win_utils import CREATE_NO_WINDOW
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +89,43 @@ _RELEASE_SUBDIRS = frozenset(
 #: папка на отключённом носителе может «висеть» — поэтому все проверки в try).
 _SAFE_ERRORS = (OSError, ValueError)
 
+#: Служба запрета и её параметр с путём к ``winws.exe`` в реестре.
+_SERVICE_KEY = r"SYSTEM\CurrentControlSet\Services\zapret"
+_SERVICE_IMAGE_PATH = "ImagePath"
+
+#: Глубина обхода дисков в :meth:`ZapretLocator.deep_search`, считая корень
+#: диска за 0. Трёх уровней хватает на ``D:\\Games\\zapret`` и подобное, а
+#: полный обход диска занял бы десятки минут.
+DEEP_SEARCH_MAX_DEPTH = 3
+
+#: Как часто сообщать о проверяемой папке при полном поиске (секунды).
+_PROGRESS_INTERVAL_S = 0.15
+
+#: Папки, в которые обход дисков не спускается: системные, служебные и
+#: заведомо «не запрет». Сравнение — по имени, регистр не важен.
+_SKIP_DIR_NAMES = frozenset(
+    {
+        "windows",
+        "program files",
+        "program files (x86)",
+        "programdata",
+        "$recycle.bin",
+        "system volume information",
+        "recovery",
+        "perflogs",
+        # Мусор разработчика и окружения Python: запрет там не лежит, а
+        # файлов внутри очень много.
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "site-packages",
+        # Профили пользователей — это тоже служебные данные.
+        "appdata",
+    }
+)
+
 
 def _default_candidates() -> list[Path]:
     """Типичные места установки запрета в порядке приоритета.
@@ -78,12 +135,13 @@ def _default_candidates() -> list[Path]:
     временной папке распаковки и ``%TEMP%\\zapret`` попадал в кандидаты.
     """
     app_dir = portable.application_dir()
+    home = Path.home()
     candidates: list[Path] = [
         Path(r"D:\Zapret"),
         Path(r"C:\zapret"),
         app_dir / "zapret",  # рядом с приложением (в т. ч. portable-режим)
         app_dir.parent / "zapret",  # на одном уровне с папкой приложения
-        Path.home() / "zapret",
+        home / "zapret",
     ]
 
     local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
@@ -98,7 +156,53 @@ def _default_candidates() -> list[Path]:
     if portable.enabled and portable.base_dir is not None:
         candidates.append(Path(portable.base_dir) / "zapret")
 
+    # Запрет часто распаковывают в «Загрузки» или на рабочий стол, а не в
+    # корень диска: указать эти места дешевле, чем обходить диск целиком.
+    candidates.extend(
+        [
+            home / "Downloads" / "zapret",
+            home / "Desktop" / "zapret",
+            home / "Documents" / "zapret",
+        ]
+    )
+
+    # Запрет мог быть установлен в корень любого локального диска, а не только
+    # C: или D:. Проверка корня — один вызов ``is_dir``, это дёшево.
+    for letter in string.ascii_uppercase:
+        root = Path(f"{letter}:\\")
+        try:
+            if root.is_dir():
+                candidates.append(root / "zapret")
+        except _SAFE_ERRORS:
+            continue
+
     return candidates
+
+
+def _local_drive_roots() -> list[Path]:
+    """Корни локальных дисков (без сети и без отключённых носителей).
+
+    Обход сетевого диска или кардридера без карты может «висеть» минутами,
+    поэтому в полный обход берутся только фиксированные диски. При ошибке
+    определения типа диска (например, на нестандартном носителе) диск
+    считается локальным — лучше проверить, чем пропустить запрет.
+    """
+    if os.name != "nt":  # pragma: no cover — приложение Windows-only
+        return []
+
+    drive_fixed = 3  # DRIVE_FIXED из WinBase.h
+    roots: list[Path] = []
+    for letter in string.ascii_uppercase:
+        root = Path(f"{letter}:\\")
+        try:
+            if not root.is_dir():
+                continue
+            kind = ctypes.windll.kernel32.GetDriveTypeW(f"{letter}:\\")
+        except (OSError, AttributeError, ValueError):
+            kind = drive_fixed
+        if kind in (0, drive_fixed):  # 0 — тип неизвестен, проверяем
+            roots.append(root)
+    return roots
 
 
 def _describe(path: Path) -> str:
@@ -132,6 +236,9 @@ class ZapretLocator:
         self._extra: tuple[Path, ...] = tuple(
             Path(item) for item in (extra_candidates or ())
         )
+        #: Время последнего сообщения о прогрессе обхода — чтобы не заваливать
+        #: интерфейс сигналами на больших папках (см. :meth:`_report_progress`).
+        self._last_progress_at = 0.0
 
     # ------------------------------------------------------------------
     #  Поиск
@@ -139,11 +246,21 @@ class ZapretLocator:
     def candidates(self) -> list[Path]:
         """Пути-кандидаты в порядке приоритета (без дубликатов).
 
+        Порядок: явные пути вызывающей стороны, папка службы из реестра,
+        подпапки с именем на ``zapret``, затем типичные места установки.
+        Реестр и маска идут раньше типичных мест: они указывают на реальную
+        папку запрета, а не на предположение.
+
         Временные папки (``%TEMP%`` и подобные) из списка исключаются: запрет
         там не устанавливается, а в сборке PyInstaller такие пути появляются
         сами собой (``%TEMP%\\zapret``).
         """
-        ordered: list[Path] = [*self._extra, *_default_candidates()]
+        ordered: list[Path] = [
+            *self._extra,
+            *self._registry_candidates(),
+            *self._mask_candidates(),
+            *_default_candidates(),
+        ]
         unique: list[Path] = []
         seen: set[str] = set()
         for candidate in ordered:
@@ -159,6 +276,108 @@ class ZapretLocator:
                 continue
             unique.append(candidate)
         return unique
+
+    def _registry_candidates(self) -> list[Path]:
+        """Папка запрета по данным службы Windows (реестр).
+
+        При установке службы ``service.bat`` пишет в
+        ``HKLM\\SYSTEM\\CurrentControlSet\\Services\\zapret`` параметр
+        ``ImagePath`` — полную команду запуска, например
+        ``"D:\\Zapret\\bin\\winws.exe" --wf-tcp=80,443``. Это самый надёжный
+        источник: путь настоящий, а не угаданный.
+
+        ``winws.exe`` лежит в ``bin``, поэтому папкой запрета считается
+        каталог **двумя** уровнями выше. Если службы нет, нет прав на чтение
+        (обычная ситуация без прав администратора) или значение не разобрать —
+        возвращается пустой список: вызывающая сторона просто продолжит по
+        остальным кандидатам.
+        """
+        if winreg is None or os.name != "nt":  # pragma: no cover — не Windows
+            return []
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SERVICE_KEY) as key:
+                image_path, _ = winreg.QueryValueEx(key, _SERVICE_IMAGE_PATH)
+        except FileNotFoundError:
+            log.debug("Служба zapret не установлена — реестр не используем")
+            return []
+        except (OSError, PermissionError, ValueError) as exc:
+            # Нет прав на чтение HKLM — это нормально для обычного запуска.
+            log.debug("Не удалось прочитать путь службы из реестра: %s", exc)
+            return []
+
+        exe = self._service_exe_path(str(image_path))
+        if exe is None:
+            log.debug("Не удалось разобрать ImagePath службы zapret: %r", image_path)
+            return []
+        # ``<папка запрета>\\bin\\winws.exe`` → ``<папка запрета>``.
+        return [exe.parent.parent]
+
+    @staticmethod
+    def _service_exe_path(image_path: str) -> Path | None:
+        """Достаёт путь к ``winws.exe`` из значения ``ImagePath``.
+
+        Формат значения не фиксирован: путь может быть в кавычках (обычный
+        случай — ``"D:\\Zapret\\bin\\winws.exe" --wf-tcp=80,443``) или без них,
+        а перед ним может стоять команда-обёртка (``cmd.exe /c ...``). Поэтому
+        путь ищется не до первого пробела, а по последнему ``winws.exe``:
+        начало берётся от буквы диска (``D:``) — так в путь не попадают ни
+        аргументы, ни обёртка. ``None`` — разобрать не удалось.
+        """
+        text = (image_path or "").strip()
+        if not text:
+            return None
+
+        exe_name = WINWS_EXE.name  # ``winws.exe``
+        index = text.lower().rfind(exe_name.lower())
+        if index == -1:
+            return None
+
+        # Ищем начало пути — букву диска. ``text`` уже без пробелов по краям,
+        # поэтому короткая строка вида ``C:\\`` сюда не попадает.
+        start = -1
+        for position in range(index - 1, 0, -1):
+            if text[position] == ":" and text[position - 1].isalpha():
+                start = position - 1
+                break
+        if start == -1:
+            return None
+
+        raw = text[start : index + len(exe_name)].strip().strip('"')
+        return Path(raw) if raw else None
+
+    def _mask_candidates(self) -> list[Path]:
+        """Подпапки с именем на ``zapret`` в типичных родительских каталогах.
+
+        Релизы запрета распаковывают как ``zapret-discord-youtube-1.9.2``, и
+        точное имя ``zapret`` (как в :func:`_default_candidates`) такую папку
+        не находит. Перебор ограничен одним уровнем вложения в заранее
+        известных каталогах — это быстро, в отличие от обхода дисков.
+        """
+        home = Path.home()
+        parents: list[Path] = [
+            Path("D:\\"),
+            Path("C:\\"),
+            home,
+            Path(os.environ.get("LOCALAPPDATA", "") or "."),
+            Path(os.environ.get("ProgramFiles", "") or "."),
+            home / "Downloads",
+            home / "Desktop",
+        ]
+
+        found: list[Path] = []
+        for parent in parents:
+            try:
+                if not parent.is_dir():
+                    continue
+                for entry in parent.iterdir():
+                    if entry.is_dir() and entry.name.lower().startswith("zapret"):
+                        found.append(entry)
+            except (OSError, PermissionError) as exc:
+                # Недоступная папка (нет прав, отключён носитель) — не повод
+                # прерывать поиск: остальные родительские каталоги рабочие.
+                log.debug("Пропущен каталог %s: %s", _describe(parent), exc)
+                continue
+        return found
 
     def find(self) -> Path | None:
         """Возвращает первую папку, похожую на запрет. ``None`` — не найдено."""
@@ -232,6 +451,138 @@ class ZapretLocator:
         if not parts:
             return "признаков запрета нет"
         return "найдено: " + ", ".join(parts)
+
+    # ------------------------------------------------------------------
+    #  Полный обход дисков
+    # ------------------------------------------------------------------
+    def deep_search(
+        self,
+        on_progress: Callable[[str], None] | None = None,
+        on_found: Callable[[Path], None] | None = None,
+        stop_flag: Callable[[], bool] | None = None,
+    ) -> Path | None:
+        """Ищет папку запрета обходом локальных дисков (долгая операция).
+
+        В :meth:`candidates` этот метод **не** входит: обход диска занимает
+        минуты, поэтому запускается только явно — кнопкой «Искать везде» в
+        мастере первого запуска. Обходятся локальные диски (сетевые и
+        съёмные пропускаются: они могут «висеть»), глубина ограничена
+        :data:`DEEP_SEARCH_MAX_DEPTH` уровнями от корня диска.
+
+        :param on_progress: вызывается с путём проверяемой папки — для статуса
+            в интерфейсе. Может вызываться из фонового потока: трогать
+            Qt-виджеты внутри него нельзя, мастер доставляет текст сигналом;
+        :param on_found: вызывается с найденной папкой (необязательно, результат
+            и так возвращается);
+        :param stop_flag: функция без аргументов; ``True`` — пользователь
+            нажал «Остановить», обход немедленно завершается с ``None``;
+        :returns: папка запрета или ``None``, если не найдена либо остановлена.
+
+        Исключения не выбрасываются: недоступные папки (``PermissionError``,
+        отключённый носитель) пропускаются.
+        """
+        roots = _local_drive_roots()
+        log.info("Полный поиск запрета: дисков найдено %d", len(roots))
+        checked = 0
+        for root in roots:
+            result, checked = self._walk_drive(
+                root, on_progress, on_found, stop_flag, checked
+            )
+            if result is not None:
+                log.info("Полный поиск запрета: найдено %s", _describe(result))
+                return result
+            if stop_flag is not None and stop_flag():
+                break
+        log.info(
+            "Полный поиск запрета завершён без результата (проверено папок: %d)",
+            checked,
+        )
+        return None
+
+    def _walk_drive(
+        self,
+        root: Path,
+        on_progress: Callable[[str], None] | None,
+        on_found: Callable[[Path], None] | None,
+        stop_flag: Callable[[], bool] | None,
+        checked: int,
+    ) -> tuple[Path | None, int]:
+        """Обходит один диск. Возвращает ``(найденная папка, счётчик папок)``.
+
+        Порядок «сверху вниз»: сначала проверяется сама папка, потом её
+        содержимое — поэтому путь покороче (``D:\\Zapret``) находится раньше
+        вложенного (``D:\\Games\\Zapret``).
+        """
+        found = self._check_dir(root, on_found)
+        if found is not None:
+            return found, checked + 1
+        if stop_flag is not None and stop_flag():
+            return None, checked
+
+        # Стек обхода: (папка, глубина). Так рекурсия не ограничена лимитом
+        # Python, а остановка проверяется на каждом шаге.
+        stack: list[tuple[Path, int]] = [(root, 0)]
+        while stack:
+            current, depth = stack.pop()
+            try:
+                entries = sorted(
+                    entry for entry in current.iterdir() if entry.is_dir()
+                )
+            except (OSError, PermissionError) as exc:
+                log.debug("Пропущена папка %s: %s", _describe(current), exc)
+                continue
+            for entry in entries:
+                if stop_flag is not None and stop_flag():
+                    return None, checked
+                if entry.name.lower() in _SKIP_DIR_NAMES:
+                    continue
+                checked += 1
+                if on_progress is not None:
+                    self._report_progress(on_progress, entry)
+                found = self._check_dir(entry, on_found)
+                if found is not None:
+                    return found, checked
+                if depth + 1 < DEEP_SEARCH_MAX_DEPTH:
+                    stack.append((entry, depth + 1))
+        return None, checked
+
+    def _check_dir(
+        self,
+        candidate: Path,
+        on_found: Callable[[Path], None] | None,
+    ) -> Path | None:
+        """Возвращает папку, если она похожа на запрет, иначе ``None``.
+
+        Проверка идёт с ``allow_temp=True``: временную папку всё равно не
+        обойти (``%TEMP%`` и ``%LOCALAPPDATA%\\Temp`` исключены как служебные),
+        а предупреждение на каждую проверенную папку засорило бы журнал —
+        окончательно результат проверяет мастер вызовом :meth:`is_valid`.
+        """
+        if not self.is_valid(candidate, allow_temp=True):
+            return None
+        if on_found is not None:
+            try:
+                on_found(candidate)
+            except Exception:  # noqa: BLE001 — колбэк интерфейса не должен ломать обход
+                log.exception("Обработчик найденной папки завершился ошибкой")
+        return candidate
+
+    def _report_progress(self, on_progress: Callable[[str], None], path: Path) -> None:
+        """Сообщает о проверяемой папке, не роняя обход из-за колбэка.
+
+        Сообщения ограничены по частоте: на диске с сотнями тысяч папок без
+        этого в очередь главного потока попали бы сотни тысяч сигналов, и
+        интерфейс начал бы отставать. Первое сообщение отправляется сразу —
+        чтобы статус не пустовал.
+        """
+        now = time.monotonic()
+        if now - self._last_progress_at < _PROGRESS_INTERVAL_S:
+            return
+        self._last_progress_at = now
+        try:
+            on_progress(str(path))
+        except Exception:  # noqa: BLE001 — см. :meth:`_check_dir`
+            log.exception("Обработчик прогресса поиска завершился ошибкой")
 
     # ------------------------------------------------------------------
     #  Скачивание с GitHub

@@ -2,12 +2,16 @@
 
 Если запрет не найден автопоиском (:class:`core.zapret_locator.ZapretLocator`)
 и путь не сохранён в ``QSettings("ZapretGUI", "Paths")``, главное окно
-показывает модальный :class:`FirstRunDialog`. В нём три пути:
+показывает модальный :class:`FirstRunDialog`. В нём четыре пути:
 
 * **Скачать с GitHub** — последний релиз Flowseal распаковывается в выбранную
   папку (прогресс-бар показывает скачивание);
 * **Указать папку вручную** — ``QFileDialog.getExistingDirectory`` и проверка
   :meth:`ZapretLocator.is_valid`;
+* **Искать везде** — полный обход локальных дисков
+  (:meth:`ZapretLocator.deep_search`) для случаев, когда запрет лежит в
+  неожиданном месте; операция долгая, поэтому запускается только по нажатию,
+  показывает проверяемую папку в статусе и прерывается кнопкой «Остановить»;
 * **Отмена** — приложение запустится в ограниченном режиме: страницы
   «Стратегии» и «Тестирование» покажут подсказку, а статус-бар — «Запрет не
   найден».
@@ -22,7 +26,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -54,6 +58,9 @@ INVALID_DIR_TEXT = (
     "Убедитесь, что там есть service.bat или bin\\winws.exe."
 )
 
+#: Сообщение, когда полный обход дисков ничего не нашёл.
+NOT_FOUND_TEXT = "Запрет не найден. Укажите папку вручную."
+
 
 class FirstRunDialog(QDialog):
     """Модальный мастер первого запуска.
@@ -66,6 +73,11 @@ class FirstRunDialog(QDialog):
     Результат: :attr:`result_path` — путь к папке запрета, если пользователь
     скачал запрет или указал папку. ``None`` — пользователь отменил.
     """
+
+    #: Текущая проверяемая папка при полном поиске. Сигнал нужен потому, что
+    #: ``deep_search`` работает в фоновом потоке и не имеет права трогать
+    #: виджеты: сигнал доставляет текст в главный поток Qt.
+    deep_progress_signal = pyqtSignal(str)
 
     def __init__(
         self,
@@ -81,11 +93,14 @@ class FirstRunDialog(QDialog):
         self.result_path: Path | None = None
         self._busy = False
         self._mode = ""
+        #: Флаг остановки полного поиска: его читает фоновый поток.
+        self._stop_deep = False
 
         self.setWindowTitle(f"{APP_NAME} — {DIALOG_TITLE}")
         self.setModal(True)
         self.setMinimumWidth(520)
 
+        self.deep_progress_signal.connect(self._on_deep_progress)
         self._build()
         self._set_busy(False)
         self.refresh_theme()
@@ -137,6 +152,18 @@ class FirstRunDialog(QDialog):
         self.manual_button.setToolTip("Выбрать папку с уже установленным запретом")
         self.manual_button.clicked.connect(self._on_manual)
 
+        self.deep_button = QPushButton("Искать везде")
+        self.deep_button.setToolTip(
+            "Пройти по всем дискам и найти папку с запретом "
+            "(может занять несколько минут)"
+        )
+        self.deep_button.clicked.connect(self._on_deep_search)
+
+        self.stop_button = QPushButton("Остановить")
+        self.stop_button.setToolTip("Прервать поиск запрета на дисках")
+        self.stop_button.setVisible(False)
+        self.stop_button.clicked.connect(self._on_stop_deep_search)
+
         self.cancel_button = QPushButton("Отмена")
         self.cancel_button.setToolTip(
             "Продолжить без запрета: страницы «Стратегии» и «Тестирование» "
@@ -146,7 +173,9 @@ class FirstRunDialog(QDialog):
 
         buttons.addWidget(self.download_button)
         buttons.addWidget(self.manual_button)
+        buttons.addWidget(self.deep_button)
         buttons.addStretch(1)
+        buttons.addWidget(self.stop_button)
         buttons.addWidget(self.cancel_button)
         layout.addLayout(buttons)
 
@@ -250,6 +279,98 @@ class FirstRunDialog(QDialog):
         log.info("Папка запрета выбрана в мастере первого запуска: %s", self.result_path)
         self.accept()
 
+    # ------------------------------------------------------------------
+    #  Полный поиск на дисках
+    # ------------------------------------------------------------------
+    def _on_deep_search(self) -> None:
+        """Запускает полный обход дисков в фоне (кнопка «Искать везде»).
+
+        Обход долгий, поэтому идёт через :meth:`WindowApi.run_async`: окно не
+        подвисает, а прогресс-бар и статус обновляются сигналом из потока.
+        """
+        if self._busy:
+            return
+        if self.window is None:
+            QMessageBox.warning(
+                self,
+                DIALOG_TITLE,
+                "Поиск недоступен: диалог открыт без главного окна.",
+            )
+            return
+
+        self._mode = "deep_search"
+        self._stop_deep = False
+        self._set_busy(True, "Поиск запрета на дисках...")
+        self.progress.setRange(0, 0)  # сколько всего папок — заранее неизвестно
+        self.progress.setVisible(True)
+
+        worker = self.window.run_async(
+            self.locator.deep_search,
+            on_progress=self.deep_progress_signal.emit,
+            stop_flag=lambda: self._stop_deep,
+            busy_message="Поиск запрета на дисках...",
+        )
+        if worker is None:
+            # Диалог открыт не из потока окна — фоновую задачу не отдать.
+            self._mode = ""
+            self._set_busy(False)
+            self.progress.setRange(0, 100)
+            self.progress.setVisible(False)
+            return
+        worker.finished_signal.connect(self._on_deep_ready)
+        worker.error_signal.connect(self._on_deep_error)
+
+    def _on_deep_progress(self, text: str) -> None:
+        """Показывает папку, которую сейчас проверяет фоновый поток."""
+        if text:
+            self._set_status(f"Проверяю: {text}")
+
+    def _on_stop_deep_search(self) -> None:
+        """Просит фоновый поток завершить обход.
+
+        Диалог не закрывается: поток ещё работает, результат придёт в
+        :meth:`_on_deep_ready` (``None`` — обход остановлен).
+        """
+        self._stop_deep = True
+        self.stop_button.setEnabled(False)
+        self._set_status("Останавливаю поиск...")
+
+    def _on_deep_ready(self, result: object) -> None:
+        """Полный обход завершился: найденная папка или ``None``."""
+        self._finish_deep_search()
+        path: Path | None = None
+        if result is not None:
+            try:
+                path = Path(result)  # type: ignore[arg-type]
+            except TypeError:
+                path = None
+        if path is None or not self.locator.is_valid(path):
+            QMessageBox.information(self, DIALOG_TITLE, NOT_FOUND_TEXT)
+            return
+        self._accept_path(path)
+
+    def _on_deep_error(self, message: str) -> None:
+        """Ошибка в фоновом потоке поиска."""
+        self._finish_deep_search()
+        QMessageBox.warning(
+            self,
+            DIALOG_TITLE,
+            message or "Не удалось выполнить поиск. Укажите папку вручную.",
+        )
+
+    def _finish_deep_search(self) -> None:
+        """Возвращает мастер в исходное состояние после обхода."""
+        self._stop_deep = False
+        self._mode = ""
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setVisible(False)
+        self._set_busy(False)
+        self._set_status("")
+        # Кнопка остановки снова должна быть активной: иначе повторный поиск
+        # нельзя будет прервать.
+        self.stop_button.setEnabled(True)
+
     def _confirm_overwrite(self, target: Path) -> bool | None:
         """Предупреждает, если в выбранной папке уже что-то есть.
 
@@ -351,10 +472,19 @@ class FirstRunDialog(QDialog):
     #  Состояние интерфейса
     # ------------------------------------------------------------------
     def _set_busy(self, busy: bool, status: str = "") -> None:
-        """Блокирует кнопки на время скачивания."""
+        """Блокирует кнопки на время долгой операции.
+
+        Пока идёт полный поиск, вместо «Отмены» показывается «Остановить»:
+        закрывать диалог, не дождавшись фонового потока, нельзя.
+        """
         self._busy = busy
-        for button in (self.download_button, self.manual_button, self.cancel_button):
+        for button in (self.download_button, self.manual_button, self.deep_button):
             button.setEnabled(not busy)
+        searching = busy and self._mode == "deep_search"
+        self.cancel_button.setEnabled(not busy)
+        self.cancel_button.setVisible(not searching)
+        self.stop_button.setVisible(searching)
+        self.stop_button.setEnabled(searching)
         if status:
             self._set_status(status)
 
@@ -367,7 +497,11 @@ class FirstRunDialog(QDialog):
         self.icon_label.setPixmap(make_pixmap("download", 36, Theme.color("accent")))
 
     def reject(self) -> None:  # noqa: D102 — Qt API
-        """Отмена: скачивание не прерываем, но закрывать окно не даём."""
+        """Отмена: фоновую операцию не прерываем, окно не закрываем.
+
+        Пока идёт скачивание или обход дисков, диалог остаётся открытым:
+        поток ещё работает, и его результат должен быть доставлен сюда же.
+        """
         if self._busy:
             return
         log.info("Мастер первого запуска отменён — работаем без запрета")

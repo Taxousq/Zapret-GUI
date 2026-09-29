@@ -2,14 +2,24 @@
 
 Отдельный модуль без зависимостей от виджетов: иконки нужны и сайдбару, и
 шапке, и (при желании) трею. PNG-файлов в проекте нет — все иконки рисуются
-через :class:`QPainter` штрихами толщиной 1.5 px, поэтому они остаются
+через :class:`QPainter` штрихами толщиной 1.5 px (исключение — сердце
+поддержки: оно заливное, см. :func:`draw_heart`), поэтому они остаются
 резкими при любом масштабе и перекрашиваются вместе с темой.
 """
 
 from __future__ import annotations
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 
 from gui.theme import Theme
 
@@ -151,6 +161,58 @@ def draw_globe(painter: QPainter, s: float) -> None:
     painter.drawLine(QPointF(5.4 * s, 16.6 * s), QPointF(18.6 * s, 16.6 * s))
 
 
+def draw_telegram(painter: QPainter, s: float) -> None:
+    """Бумажный самолётик — раздел «TG WS Proxy» (Telegram)."""
+    # Контур: нос справа сверху, хвост слева, нижний угол — «днище» самолёта.
+    path = QPainterPath(QPointF(21.0 * s, 3.5 * s))
+    path.lineTo(3.5 * s, 10.9 * s)
+    path.lineTo(10.0 * s, 13.4 * s)
+    path.lineTo(12.0 * s, 20.5 * s)
+    path.lineTo(15.0 * s, 14.2 * s)
+    path.lineTo(21.0 * s, 3.5 * s)
+    painter.drawPath(path)
+    # Линия сгиба — от середины левого края к середине правого: без неё
+    # силуэт читается как многоугольник, а не как самолётик.
+    painter.drawLine(QPointF(5.4 * s, 13.4 * s), QPointF(14.6 * s, 9.4 * s))
+    # Второе «крыло»: от точки сгиба вниз к нижнему углу.
+    painter.drawLine(QPointF(10.0 * s, 13.4 * s), QPointF(14.6 * s, 9.4 * s))
+
+
+def draw_heart(painter: QPainter, s: float) -> None:
+    """Сердце — диалог поддержки разработки (донаты).
+
+    Единственная заливная иконка набора: тонкий контур в мелком размере
+    читался бы как клякса, а заливка сразу опознаётся как сердце. Кисть
+    берётся из пера — цвет задаёт :func:`_painter`, и второй источник цвета
+    здесь не нужен.
+    """
+    # Контур: острие снизу, две «половинки» сверху с выемкой по центру.
+    path = QPainterPath(QPointF(12.0 * s, 20.5 * s))
+    path.cubicTo(
+        QPointF(2.5 * s, 14.5 * s),
+        QPointF(3.0 * s, 4.5 * s),
+        QPointF(7.6 * s, 3.6 * s),
+    )
+    path.cubicTo(
+        QPointF(10.3 * s, 3.1 * s),
+        QPointF(11.6 * s, 5.4 * s),
+        QPointF(12.0 * s, 6.6 * s),
+    )
+    path.cubicTo(
+        QPointF(12.4 * s, 5.4 * s),
+        QPointF(13.7 * s, 3.1 * s),
+        QPointF(16.4 * s, 3.6 * s),
+    )
+    path.cubicTo(
+        QPointF(21.0 * s, 4.5 * s),
+        QPointF(21.5 * s, 14.5 * s),
+        QPointF(12.0 * s, 20.5 * s),
+    )
+    path.closeSubpath()
+    painter.setBrush(QBrush(painter.pen().color()))
+    painter.drawPath(path)
+
+
 #: Имя иконки -> функция рисования. Ключи совпадают с ключами иконок разделов
 #: в :mod:`gui.sidebar`.
 DRAWERS = {
@@ -164,6 +226,8 @@ DRAWERS = {
     "list": draw_list,
     "gear": draw_gear,
     "globe": draw_globe,
+    "telegram": draw_telegram,
+    "heart": draw_heart,
 }
 
 
