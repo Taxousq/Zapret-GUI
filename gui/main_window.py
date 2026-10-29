@@ -1247,16 +1247,14 @@ class MainWindow(QMainWindow):
         found = release if isinstance(release, AppRelease) else None
         if found is None or not self.app_updater.has_update(found):
             # Версия та же (или релиза нет) — баннер убираем, обновлять нечего.
+            # Модальное окно здесь не показывается: пользователь нажал кнопку,
+            # и ответ уже виден в статус-баре и в карточке «Интерфейс» —
+            # лишний диалог «Установлена последняя версия» только мешал.
             self._update_header_banner(None)
             self.set_status("Обновлений нет", 6000)
             self.update_page.on_app_check_result(
                 found,
                 False,
-                "" if found is not None else f"Установлена последняя версия: {APP_VERSION}.",
-            )
-            QMessageBox.information(
-                self,
-                "Обновления",
                 f"Установлена последняя версия: {APP_VERSION}.",
             )
             return

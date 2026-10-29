@@ -379,12 +379,14 @@ class TgwsUpdater:
 
         _remove_file(backup)
         log.info("Exe TG WS Proxy заменён: %s", exe_path)
-        started, message = target_manager.start()
-        if not started:
-            return False, f"Файл обновлён, но приложение не запустилось: {message}"
-
         suffix = f" до {version}" if str(version or "").strip() else ""
-        return True, f"Обновлено{suffix}. Приложение запущено заново."
+        # Автозапуск намеренно не выполняется. Раньше после замены файла
+        # вызывался start(): если трей-копия ещё держалась (или прокси был
+        # запущен пользователем), второй экземпляр показывал окно
+        # «Приложение уже запущено, проверьте трей» — обновление выглядело
+        # сломанным. Обновлённый файл пользователь запускает сам кнопкой
+        # «Запустить» на странице TG WS Proxy.
+        return True, f"Обновлено{suffix}. Запустите TG WS Proxy, когда будет удобно."
 
 
 def _restore_backup(backup: Path, target: Path) -> None:

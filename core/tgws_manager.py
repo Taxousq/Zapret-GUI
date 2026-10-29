@@ -456,6 +456,13 @@ class TgwsManager:
         if exe is None:
             return False, NOT_INSTALLED_HINT
 
+        # Уже запущенный экземпляр второй раз не стартуем: у Flowseal-сборки
+        # второй процесс показывает модальное окно «Приложение уже запущено,
+        # проверьте трей», а два процесса конкурируют за один трей.
+        if self.is_running():
+            log.info("TG WS Proxy уже запущен — повторный запуск не нужен")
+            return True, "TG WS Proxy уже запущен"
+
         try:
             subprocess.Popen([str(exe)], cwd=str(exe.parent), shell=False)
         except OSError as exc:

@@ -198,13 +198,12 @@ _QSS = Template(
         background-color: transparent;
         border: 1.5px solid transparent;
         border-radius: 10px;
-        padding: 0;
-        /* Квадрат под узкий сайдбар: содержимое ~44 px плюс рамка 1.5 px с
-           каждой стороны даёт почти 48×48, при этом кнопка помещается в
-           полосу шириной 64 px с отступами 8 px. */
-        min-width: 44px;
-        min-height: 44px;
-        font-size: 13px;
+        /* Пункт меню — строка «иконка + подпись». Отступ слева задаёт общий
+           левый край иконок: без него подписи разной длины «гуляли» бы. */
+        padding: 0 10px;
+        text-align: left;
+        min-height: 36px;
+        font-size: 12px;
         color: $text;
     }
     QPushButton#NavButton:hover {
