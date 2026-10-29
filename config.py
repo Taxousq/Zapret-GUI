@@ -22,7 +22,7 @@ from string import Template
 #  Общие сведения о приложении
 # ---------------------------------------------------------------------------
 APP_NAME = "Zapret GUI"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 APP_TITLE = "Zapret GUI — управление обходом блокировок"
 #: Автор сборки — подписывается в статус-баре («by Taxo»).
 APP_AUTHOR = "Taxo"

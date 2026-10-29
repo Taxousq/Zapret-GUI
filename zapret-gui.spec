@@ -7,7 +7,8 @@
     rem или вручную:
     python -m PyInstaller --clean --noconfirm zapret-gui.spec
 
-Результат — один файл ``dist\\ZapretGUI.exe`` (GUI без окна консоли).
+Результат — папка ``dist\\ZapretGUI`` (``ZapretGUI.exe`` + ``_internal``),
+GUI без окна консоли.
 
 Что важно знать:
 
@@ -18,12 +19,14 @@
 * ``datas=[]``: папка запрета в поставку **не** входит — она скачивается при
   первом запуске или указывается вручную в разделе «Настройки».
 * ``console=False``: приложение графическое, консоль не нужна.
-* ``runtime_tmpdir``: каталог распаковки ``_MEI`` жёстко зафиксирован на
-  ``C:\\ProgramData\\ZapretGUI\\MEI`` и не зависит от переменной ``%TEMP%``
-  процесса-родителя. Иначе onefile распаковывался бы в нестандартный ``TEMP``
-  (например, при запуске из установщика) и падал с «Failed to load Python DLL»
-  из-за конфликта с оставшимися от прошлых запусков ``_MEI``-папками.
-  Каталог доступен всем пользователям и создаётся PyInstaller автоматически.
+* ``onedir`` (EXE с ``exclude_binaries`` + ``COLLECT``): результат — папка
+  ``dist\ZapretGUI`` с exe и ``_internal``. Раньше собирался onefile: он
+  распаковывал ~100 МБ в ``_MEI``-каталог на каждом запуске и при старте
+  сразу после установки (галочка «Запустить») падал с «Failed to load
+  Python DLL» — распаковка успевала не всегда (антивирус, параллельный
+  запуск, нестандартный ``%TEMP%``). В onedir ``python313.dll`` и её
+  зависимости лежат рядом с exe: загружать нечего, ошибка такого рода
+  невозможна, а старт заметно быстрее.
 * ``icon``: если положить ``assets/icon.ico``, иконка подхватится сама;
   без файла сборка идёт с иконкой PyInstaller по умолчанию (файл не нужен).
 * ``upx=True``: сжатие exe, если в PATH есть UPX; без UPX PyInstaller просто
@@ -72,19 +75,18 @@ a = Analysis(  # noqa: F821 — имена PyInstaller подставляет с
 pyz = PYZ(a.pure)  # noqa: F821
 
 
+# exe без встроенных бинарников: они уедут в _internal рядом с ним (onedir).
 exe = EXE(  # noqa: F821
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="ZapretGUI",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=r"C:\ProgramData\ZapretGUI\MEI",
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -95,4 +97,16 @@ exe = EXE(  # noqa: F821
     icon=icon_path,
     # Файл версии Windows (VERSIONINFO) не используется: его в проекте нет.
     version=None,
+)
+
+
+# Папка поставки: dist/ZapretGUI/ZapretGUI.exe + dist/ZapretGUI/_internal.
+coll = COLLECT(  # noqa: F821
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="ZapretGUI",
 )

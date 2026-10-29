@@ -361,8 +361,9 @@ python main.py
 
 ## Сборка
 
-Сборка состоит из двух шагов: `build.bat` собирает `dist\ZapretGUI.exe`
-(PyInstaller), затем `installer.iss` пакует его в установщик Inno Setup
+Сборка состоит из двух шагов: `build.bat` собирает папку `dist\ZapretGUI`
+(`ZapretGUI.exe` + `_internal`, режим PyInstaller onedir), затем
+`installer.iss` пакует её в установщик Inno Setup
 (`Output\ZapretGUI-Setup-X.Y.Z.exe`). Ниже — оба шага подробно, а в конце —
 как выпустить релиз для автообновления.
 
@@ -393,7 +394,7 @@ python -m PyInstaller --clean --noconfirm zapret-gui.spec
 pause
 ```
 
-После сборки скрипт сам проверяет, что появился `dist\ZapretGUI.exe`, и печатает
+После сборки скрипт сам проверяет, что появился `dist\ZapretGUI\ZapretGUI.exe`, и печатает
 `[OK] Build complete`. Если шаг упал, печатается `[ERROR]` с пояснением и окно
 **не** закрывается — лог можно прочитать.
 
@@ -403,7 +404,9 @@ pause
 > `hon`). Оба файла сохранены в UTF-8 **без BOM** и начинаются с
 > `@echo off` / `chcp 65001 >nul` / `setlocal`.
 
-Результат — **`dist\ZapretGUI.exe`**: один файл, GUI-приложение без окна консоли.
+Результат — папка **`dist\ZapretGUI`**: `ZapretGUI.exe` (GUI без окна консоли) и
+`_internal` с зависимостями. Поставка копируется целиком: распаковки при
+запуске нет, поэтому старт быстрый и нет ошибки «Failed to load Python DLL».
 
 ### Вручную
 
@@ -417,13 +420,14 @@ python -m PyInstaller --clean --noconfirm zapret-gui.spec
 
 | Параметр | Значение | Зачем |
 |---|---|---|
-| `name` | `ZapretGUI` | Имя файла: `dist\ZapretGUI.exe` |
+| `name` | `ZapretGUI` | Имя папки поставки: `dist\ZapretGUI\ZapretGUI.exe` |
+| `onedir` | `EXE(exclude_binaries=True)` + `COLLECT` | Без распаковки в `_MEI`: `python313.dll` лежит в `_internal` рядом с exe, поэтому нет ошибки «Failed to load Python DLL» при запуске сразу после установки |
 | `console` | `False` | GUI-приложение, консоль не нужна |
 | `icon` | `assets/icon.ico` | Если файла нет — строка игнорируется, сборка идёт с иконкой PyInstaller |
 | `hiddenimports` | `['PyQt6.QtCharts', 'PyQt6.QtSvg']` | **Обязательно**: `QtCharts` подключается динамически (график пинга), без него exe упадёт при импорте |
 | `datas` | `[]` | Папка запрета **не** включается в поставку — она скачивается отдельно |
-| `upx` | `True` | Сжатие exe (если UPX есть в `PATH`; иначе шаг пропускается) |
-| `excludes` | `tkinter`, `unittest`, `pydoc` | Уменьшают размер exe |
+| `upx` | `True` | Сжатие бинарников (если UPX есть в `PATH`; иначе шаг пропускается) |
+| `excludes` | `tkinter`, `unittest`, `pydoc` | Уменьшают размер поставки |
 
 Чтобы у exe была своя иконка, положите `assets/icon.ico` (размер 256×256) —
 `zapret-gui.spec` подхватит файл автоматически.
@@ -432,14 +436,15 @@ python -m PyInstaller --clean --noconfirm zapret-gui.spec
 
 ### Создание установщика (Inno Setup)
 
-1. Соберите exe: `.\build.bat` — должен появиться `dist\ZapretGUI.exe`;
+1. Соберите exe: `.\build.bat` — должна появиться папка `dist\ZapretGUI` со `ZapretGUI.exe` и `_internal`;
 2. Установите **Inno Setup 6**: <https://jrsoftware.org/isdl.php>;
 3. Откройте `installer.iss` в Inno Setup Compiler и нажмите **Compile (F9)**;
 4. Готовый установщик появится в `Output\ZapretGUI-Setup-1.0.1.exe`.
 
 Что делает `installer.iss`:
 
-* ставит `ZapretGUI.exe` в `{autopf}\Zapret GUI` (обычно `C:\Program Files\Zapret GUI`);
+* ставит папку поставки (`ZapretGUI.exe` + `_internal`) в `{autopf}\Zapret GUI`
+  (обычно `C:\Program Files\Zapret GUI`);
 * создаёт ярлык в меню Пуск и (по чекбоксу) на рабочем столе;
 * добавляет запись в «Программы и компоненты» с деинсталлятором;
 * предлагает запустить приложение после установки;
@@ -467,7 +472,7 @@ python -m PyInstaller --clean --noconfirm zapret-gui.spec
 
 1. поднимите версию в двух местах: `APP_VERSION` в `config.py` и
    `MyAppVersion` в `installer.iss` (например, `1.0.1` → `1.0.2`);
-2. соберите exe (`.\build.bat`) и установщик (`installer.iss` → F9);
+2. соберите поставку (`.\build.bat`) и установщик (`installer.iss` → F9);
 3. создайте на GitHub релиз с тегом вида **`v1.0.2`** (префикс `v` не мешает:
    приложение срезает его перед сравнением версий). Пометьте релиз как
    *Latest release* — API `/releases/latest` отдаёт именно последний по дате,
@@ -490,8 +495,8 @@ Portable-режим не требует установки и не пишет в
 
 **Вариант 1 — руками:**
 
-1. соберите exe: `.\build.bat`;
-2. создайте папку (например, на флешке) и положите туда `dist\ZapretGUI.exe`;
+1. соберите поставку: `.\build.bat`;
+2. создайте папку (например, на флешке) и положите туда **всю** папку `dist\ZapretGUI`;
 3. положите туда же файл `portable.flag` — можно взять готовый
    `portable.flag.example` и переименовать его (содержимое значения не имеет,
    важен сам факт наличия файла);

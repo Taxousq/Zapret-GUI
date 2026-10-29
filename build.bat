@@ -5,7 +5,7 @@ setlocal
 rem ===========================================================================
 rem  Zapret GUI - build exe (PyInstaller)
 rem  Run: build.bat   (double click, or ".\build.bat" from PowerShell)
-rem  Result: dist\ZapretGUI.exe
+rem  Result: dist\ZapretGUI\ZapretGUI.exe (+ _internal)
 rem
 rem  NOTE: PyInstaller cannot cross-compile - the exe can only be built on
 rem  Windows (same architecture as the target system).
@@ -57,10 +57,10 @@ if errorlevel 1 (
 )
 
 echo.
-if exist "dist\ZapretGUI.exe" (
-    echo [OK] Build complete: dist\ZapretGUI.exe
+if exist "dist\ZapretGUI\ZapretGUI.exe" (
+    echo [OK] Build complete: dist\ZapretGUI\ZapretGUI.exe
 ) else (
-    echo [ERROR] Build finished but dist\ZapretGUI.exe not found.
+    echo [ERROR] Build finished but dist\ZapretGUI\ZapretGUI.exe not found.
     echo Check the output above.
     pause
     exit /b 1
@@ -69,7 +69,7 @@ if exist "dist\ZapretGUI.exe" (
 echo.
 echo Next steps:
 echo   * copy the exe next to portable.flag for the portable version;
-echo   * build the installer from installer.iss with Inno Setup.
+echo   * build the installer from installer.iss with Inno Setup (dist\ZapretGUI folder).
 echo.
 
 pause

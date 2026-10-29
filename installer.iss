@@ -26,7 +26,7 @@
 #define MyAppExeName "ZapretGUI.exe"
 #define MyAppPublisher "Zapret GUI"
 #define MyAppUrl "https://github.com/Flowseal/zapret-discord-youtube"
-#define MyAppSource "dist\ZapretGUI.exe"
+#define MyAppSource "dist\ZapretGUI"
 #define PortableFlagName "portable.flag"
 
 ; ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@
 ;  Имя готового установщика — ZapretGUI-Setup-<версия>.exe: именно его ищет
 ;  автообновление в ассетах релиза (core/app_updater.py).
 ; ---------------------------------------------------------------------------
-#define MyAppVersion "1.0.4"
+#define MyAppVersion "1.0.5"
 
 ; Разрядность: /dARCH=x64 или /dARCH=arm64, по умолчанию x64.
 #ifndef ARCH
@@ -90,9 +90,8 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 ; (CloseApplications), поэтому обновление «поверх» проходит без ошибок
 ; «файл занят другим процессом».
 ; RestartApplications намеренно НЕ используется: вместе с секцией [Run]
-; (галочка «Запустить») он давал ДВА запуска подряд — два процесса
-; PyInstaller onefile конкурировали за одну _MEI-папку, и второй падал
-; с «Failed to load Python DLL». Запуск после установки выполняет [Run].
+; (галочка «Запустить») он давал ДВА запуска подряд — два процесса одного
+; приложения дрались за файлы и порты. Запуск после установки делает [Run].
 CloseApplications=yes
 ; Иконка установщика: assets\icon.ico, если файл есть.
 #if FileExists("assets\icon.ico")
@@ -110,11 +109,17 @@ Name: "portableflag"; Description: "Portable-режим: хранить наст
 #endif
 
 [Files]
-Source: "{#MyAppSource}"; DestDir: "{app}"; Flags: ignoreversion
+; Поставка onedir: exe + _internal — копируется вся папка целиком.
+Source: "{#MyAppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 #ifdef PORTABLE
 Source: "portable.flag.example"; DestDir: "{app}"; DestName: "{#PortableFlagName}"; Flags: ignoreversion; Tasks: portableflag
 #endif
+
+[InstallDelete]
+; Каталог распаковки onefile-сборок (до 1.0.5): в onedir он больше не нужен,
+; а ~100 МБ мусора в ProgramData ни к чему.
+Type: filesandordirs; Name: "{commonappdata}\ZapretGUI"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
