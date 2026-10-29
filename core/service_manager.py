@@ -491,7 +491,58 @@ class ServiceManager:
 
         if self._wait_for_state(ServiceState.RUNNING):
             return True, "Служба запущена."
+
+        # Состояние RUNNING не дождались. По выводу `sc start` этого не видно:
+        # он показывает состояние сразу после запроса («4 RUNNING»), хотя
+        # служба могла успеть упасть. Поэтому смотрим, что с ней сейчас.
+        current = self.get_status()
+        log.warning(
+            "Служба не перешла в RUNNING за %.0f с: state=%s, message=%s",
+            STATE_WAIT_TIMEOUT,
+            current.state,
+            current.message or "-",
+        )
+        if self._winws_running():
+            # Обход уже работает, просто SCM не успел отрапортовать: у сборок
+            # Flowseal служба-обёртка запускает winws.exe как отдельный процесс.
+            return True, "Служба запущена (процесс winws.exe работает)."
+        if current.state is ServiceState.STOPPED:
+            return False, (
+                "Служба запустилась и сразу остановилась — процесс winws.exe завершился.\n\n"
+                "Что проверить:\n"
+                "• журнал в разделе «Логи»;\n"
+                "• не заняты ли порты другим VPN, прокси или вторым экземпляром запрета;\n"
+                "• что папка запрета полная: есть bin\\winws.exe и папка lists."
+            )
+        if current.message:
+            return False, f"Служба не перешла в состояние «Работает»: {current.message}"
         return False, f"Служба не перешла в состояние «Работает».\n{output}"
+
+    def _winws_running(self) -> bool:
+        """Работает ли процесс ``winws.exe`` — страховка для проверки состояния.
+
+        Запуск службы может занять больше :data:`STATE_WAIT_TIMEOUT`, и тогда
+        SCM ещё не показывает RUNNING, хотя обход уже поднялся. Без ``psutil``
+        проверить процесс нельзя — возвращается ``False``, и решение принимает
+        только SCM.
+        """
+        try:
+            import psutil  # ленивый импорт: без пакета приложение работает
+        except ImportError:
+            log.debug("psutil не установлен — проверка winws.exe недоступна")
+            return False
+
+        try:
+            for process in psutil.process_iter(["name"]):
+                try:
+                    name = str((process.info or {}).get("name") or "").lower()
+                except (psutil.Error, OSError):
+                    continue  # процесс завершился, пока его читали
+                if name.startswith("winws"):
+                    return True
+        except (psutil.Error, OSError):
+            log.debug("Не удалось перечислить процессы", exc_info=True)
+        return False
 
     def stop(self) -> tuple[bool, str]:
         """Останавливает службу."""

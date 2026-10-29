@@ -22,7 +22,7 @@ from string import Template
 #  Общие сведения о приложении
 # ---------------------------------------------------------------------------
 APP_NAME = "Zapret GUI"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 APP_TITLE = "Zapret GUI — управление обходом блокировок"
 #: Автор сборки — подписывается в статус-баре («by Taxo»).
 APP_AUTHOR = "Taxo"
@@ -187,7 +187,7 @@ SERVICE_DELETE_DELAY_SEC = 2.0
 COMMAND_TIMEOUT = 15
 
 #: Сколько ждать перехода службы в новое состояние (секунды).
-STATE_WAIT_TIMEOUT = 12.0
+STATE_WAIT_TIMEOUT = 20.0
 
 #: Период автообновления статуса службы в шапке окна (мс).
 STATUS_POLL_INTERVAL_MS = 5000
