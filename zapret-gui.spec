@@ -18,6 +18,12 @@
 * ``datas=[]``: папка запрета в поставку **не** входит — она скачивается при
   первом запуске или указывается вручную в разделе «Настройки».
 * ``console=False``: приложение графическое, консоль не нужна.
+* ``runtime_tmpdir``: каталог распаковки ``_MEI`` жёстко зафиксирован на
+  ``C:\\ProgramData\\ZapretGUI\\MEI`` и не зависит от переменной ``%TEMP%``
+  процесса-родителя. Иначе onefile распаковывался бы в нестандартный ``TEMP``
+  (например, при запуске из установщика) и падал с «Failed to load Python DLL»
+  из-за конфликта с оставшимися от прошлых запусков ``_MEI``-папками.
+  Каталог доступен всем пользователям и создаётся PyInstaller автоматически.
 * ``icon``: если положить ``assets/icon.ico``, иконка подхватится сама;
   без файла сборка идёт с иконкой PyInstaller по умолчанию (файл не нужен).
 * ``upx=True``: сжатие exe, если в PATH есть UPX; без UPX PyInstaller просто
@@ -78,7 +84,7 @@ exe = EXE(  # noqa: F821
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
+    runtime_tmpdir=r"C:\ProgramData\ZapretGUI\MEI",
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

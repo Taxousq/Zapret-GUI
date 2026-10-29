@@ -87,11 +87,13 @@ PrivilegesRequired=admin
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ; Автообновление: установщик сам закрывает работающий ZapretGUI.exe
-; (CloseApplications) и запускает его заново после установки
-; (RestartApplications), поэтому обновление «поверх» проходит без ошибок
+; (CloseApplications), поэтому обновление «поверх» проходит без ошибок
 ; «файл занят другим процессом».
+; RestartApplications намеренно НЕ используется: вместе с секцией [Run]
+; (галочка «Запустить») он давал ДВА запуска подряд — два процесса
+; PyInstaller onefile конкурировали за одну _MEI-папку, и второй падал
+; с «Failed to load Python DLL». Запуск после установки выполняет [Run].
 CloseApplications=yes
-RestartApplications=yes
 ; Иконка установщика: assets\icon.ico, если файл есть.
 #if FileExists("assets\icon.ico")
 SetupIconFile=assets\icon.ico
@@ -126,3 +128,5 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 ; В portable-режиме рядом с exe живут настройки и журнал — удаляем их.
 Type: files; Name: "{app}\config.ini"
 Type: filesandordirs; Name: "{app}\logs"
+; Каталог распаковки PyInstaller (runtime_tmpdir в zapret-gui.spec).
+Type: filesandordirs; Name: "{commonappdata}\ZapretGUI"
