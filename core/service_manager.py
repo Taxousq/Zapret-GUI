@@ -38,6 +38,8 @@ from config import (
     SERVICE_NAME,
     SERVICE_REGISTRY_KEY,
     STARTUP_DIR,
+    PROBE_LINES,
+    PROBE_TIMEOUT_SEC,
     STATE_WAIT_TIMEOUT,
     STATE_COLORS,
     STRATEGY_REGISTRY_VALUE,
@@ -502,47 +504,160 @@ class ServiceManager:
             current.state,
             current.message or "-",
         )
-        if self._winws_running():
-            # Обход уже работает, просто SCM не успел отрапортовать: у сборок
-            # Flowseal служба-обёртка запускает winws.exe как отдельный процесс.
+
+        processes = self._winws_processes()
+        service_owned = [pid for pid, parent in processes if parent == "services.exe"]
+        manual = [(pid, parent) for pid, parent in processes if parent != "services.exe"]
+        if service_owned:
+            # Обход поднят самой службой, просто SCM не успел отрапортовать.
             return True, "Служба запущена (процесс winws.exe работает)."
-        if current.state is ServiceState.STOPPED:
+        if manual:
+            # winws уже работает вне службы — типично, если батник запускали
+            # вручную. Второй экземпляр с тем же фильтром winws не поднимает
+            # («A copy of winws is already running with the same filter»),
+            # поэтому служба сразу останавливается.
+            pids = ", ".join(str(pid) for pid, _parent in manual)
             return False, (
-                "Служба запустилась и сразу остановилась — процесс winws.exe завершился.\n\n"
-                "Что проверить:\n"
-                "• журнал в разделе «Логи»;\n"
-                "• не заняты ли порты другим VPN, прокси или вторым экземпляром запрета;\n"
-                "• что папка запрета полная: есть bin\\winws.exe и папка lists."
+                f"Служба не запустилась: уже работает процесс winws.exe (PID {pids}), "
+                "запущенный вне службы — обычно это ручной запуск батника.\n\n"
+                "Второй экземпляр winws с тем же фильтром не поднимается.\n"
+                "Закройте найденный процесс winws.exe и повторите запуск."
             )
+        if current.state is ServiceState.STOPPED:
+            return False, self._stopped_message()
+
         if current.message:
             return False, f"Служба не перешла в состояние «Работает»: {current.message}"
         return False, f"Служба не перешла в состояние «Работает».\n{output}"
 
-    def _winws_running(self) -> bool:
-        """Работает ли процесс ``winws.exe`` — страховка для проверки состояния.
+    def _stopped_message(self) -> str:
+        """Объяснение для случая «служба стартовала и сразу упала».
 
-        Запуск службы может занять больше :data:`STATE_WAIT_TIMEOUT`, и тогда
-        SCM ещё не показывает RUNNING, хотя обход уже поднялся. Без ``psutil``
-        проверить процесс нельзя — возвращается ``False``, и решение принимает
-        только SCM.
+        SCM пишет в журнал только «служба неожиданно прервана» — причину
+        знает сам ``winws.exe``. Поэтому его запускают ещё раз с теми же
+        аргументами (взятыми из ImagePath службы) и показывают его вывод:
+        без этого пользователю остаётся только гадать.
+        """
+        head = (
+            "Служба запустилась и сразу остановилась — процесс winws.exe завершился.\n\n"
+            "Что проверить:\n"
+            "• журнал в разделе «Логи»;\n"
+            "• не заняты ли порты другим VPN, прокси или вторым экземпляром запрета;\n"
+            "• что папка запрета полная: есть bin\\winws.exe и папка lists."
+        )
+        probe = self._probe_winws()
+        if not probe:
+            return head
+        return f"{head}\n\nwinws сообщает:\n{probe}"
+
+    def service_arguments(self) -> list[str]:
+        """Аргументы winws из конфигурации службы (``ImagePath`` в реестре).
+
+        Реестр читается напрямую: ``sc qc`` печатает ключи по-разному в
+        зависимости от языка Windows, а имя значения ``ImagePath`` одинаково
+        всегда.
+        """
+        try:
+            import winreg
+
+            path = rf"SYSTEM\CurrentControlSet\Services\{self.service_name}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+                image, _kind = winreg.QueryValueEx(key, "ImagePath")
+        except (OSError, ImportError):
+            log.debug("Не удалось прочитать ImagePath службы", exc_info=True)
+            return []
+
+        text = str(image or "").strip()
+        if not text:
+            return []
+
+        # Первый токен — путь к exe (в кавычках, если содержит пробелы).
+        import shlex
+
+        try:
+            tokens = shlex.split(text, posix=False)
+        except ValueError:
+            return []
+        tokens = [token.strip('"') for token in tokens]
+        return tokens[1:]
+
+    def _probe_winws(self, timeout: float = PROBE_TIMEOUT_SEC) -> str:
+        """Запускает ``winws.exe`` с аргументами службы и возвращает его вывод.
+
+        Процесс убивается принудительно: даже если он поднимется, оставлять
+        второй экземпляр нельзя — он начнёт перехватывать трафик в обход
+        службы. Пустая строка — вывода нет или проверить не удалось.
+        """
+        winws = self.zapret_path / "bin" / "winws.exe"
+        if not winws.is_file():
+            return ""
+        args = self.service_arguments()
+        if not args:
+            return ""
+
+        try:
+            process = subprocess.Popen(
+                [str(winws), *args],
+                cwd=str(winws.parent),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except OSError as exc:
+            log.debug("Не удалось запустить winws для диагностики", exc_info=True)
+            return f"(не удалось запустить winws: {exc})"
+
+        try:
+            raw, _ = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raw, _ = process.communicate()
+            return "(winws не завершился за отведённое время — аргументы приняты)"
+        finally:
+            if process.poll() is None:  # страховка: процесс не должен остаться
+                process.kill()
+
+        text = (raw or b"").decode("cp866", errors="replace").strip()
+        if not text:
+            return ""
+        log.warning("Диагностический запуск winws: %s", text[-1500:])
+        tail = text.splitlines()[-PROBE_LINES:]
+        return "\n".join(tail)
+
+    def _winws_processes(self) -> list[tuple[int, str]]:
+        """Процессы ``winws*``: пары ``(pid, имя родителя в нижнем регистре)``.
+
+        Родитель отделяет обход, поднятый службой (``services.exe``), от
+        запущенного вручную батником (``cmd.exe``): во втором случае второй
+        экземпляр winws уже не поднимется — у него тот же фильтр.
+
+        Без ``psutil`` список пуст, и решение принимает только SCM.
         """
         try:
             import psutil  # ленивый импорт: без пакета приложение работает
         except ImportError:
             log.debug("psutil не установлен — проверка winws.exe недоступна")
-            return False
+            return []
 
+        found: list[tuple[int, str]] = []
         try:
-            for process in psutil.process_iter(["name"]):
+            for process in psutil.process_iter(["name", "ppid"]):
                 try:
-                    name = str((process.info or {}).get("name") or "").lower()
+                    info = process.info or {}
+                    name = str(info.get("name") or "").lower()
+                    if not name.startswith("winws"):
+                        continue
+                    parent_name = ""
+                    try:
+                        parent_name = psutil.Process(info.get("ppid")).name().lower()
+                    except (psutil.Error, OSError):
+                        parent_name = ""
+                    found.append((process.pid, parent_name))
                 except (psutil.Error, OSError):
                     continue  # процесс завершился, пока его читали
-                if name.startswith("winws"):
-                    return True
         except (psutil.Error, OSError):
             log.debug("Не удалось перечислить процессы", exc_info=True)
-        return False
+        return found
 
     def stop(self) -> tuple[bool, str]:
         """Останавливает службу."""
