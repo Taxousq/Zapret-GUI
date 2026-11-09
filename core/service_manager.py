@@ -248,34 +248,88 @@ class ServiceStatus:
 # ---------------------------------------------------------------------------
 #  Разбор стратегии -> аргументы winws.exe
 # ---------------------------------------------------------------------------
+def _valid_game_range_item(item: str) -> bool:
+    """Один элемент диапазона портов: ``443`` или ``1024-65535``."""
+    if not re.fullmatch(r"[1-9][0-9]*(-[1-9][0-9]*)?", item):
+        return False
+    start, _, end = item.partition("-")
+    end = end or start
+    if len(start) > 5 or len(end) > 5:  # как service.bat: не больше 5 знаков
+        return False
+    first, last = int(start), int(end)
+    return first <= 65535 and last <= 65535 and first <= last
+
+
+def _validate_game_range(text: str) -> str | None:
+    """Повторяет :validate_game_filter_range — ``None``, если диапазон невалиден."""
+    cleaned = text.replace(" ", "")
+    if not cleaned:
+        return None
+    items = cleaned.split(",")
+    if all(_valid_game_range_item(item) for item in items):
+        return cleaned
+    return None
+
+
 def game_filter_variables(zapret_path: Path) -> dict[str, str]:
     """Повторяет :game_switch_status из service.bat.
 
-    Если файла ``utils\\game_filter.enabled`` нет, игровой фильтр выключен и
-    подставляется «12» (так же делает service.bat).
+    Файл ``utils\\game_filter.enabled`` — это набор строк ``ключ=значение``::
+
+        mode=all
+        tcp=1024-65535
+        udp=1024-65535
+
+    ``mode`` (или отдельная строка ``all``) задаёт режим, ``tcp=``/``udp=``
+    без значения переключают режим, со значением — задают свой диапазон портов.
+    Диапазоны проверяются (:validate_game_filter_range): невалидный остаётся
+    дефолтным. Нет файла или неизвестный режим — фильтр выключен («12»).
     """
     disabled = {"GameFilter": "12", "GameFilterTCP": "12", "GameFilterUDP": "12"}
     flag = zapret_path / "utils" / "game_filter.enabled"
+    if not flag.is_file():
+        return dict(disabled)
     try:
-        if not flag.is_file():
-            return dict(disabled)
-        mode = ""
-        for line in flag.read_text(encoding="utf-8", errors="replace").splitlines():
-            stripped = line.strip()
-            if stripped:
-                mode = stripped
-                break
+        text = flag.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         log.warning("Не удалось прочитать %s: %s", flag, exc)
         return dict(disabled)
 
-    full = "1024-65535"
-    if mode.lower() == "all":
-        return {"GameFilter": full, "GameFilterTCP": full, "GameFilterUDP": full}
-    if mode.lower() == "tcp":
-        return {"GameFilter": full, "GameFilterTCP": full, "GameFilterUDP": "12"}
-    # В service.bat ветка else — это UDP (и любое неизвестное значение).
-    return {"GameFilter": full, "GameFilterTCP": "12", "GameFilterUDP": full}
+    tcp_range = "1024-65535"
+    udp_range = "1024-65535"
+    mode = "disabled"
+    tcp_candidate = ""
+    udp_candidate = ""
+    for line in text.splitlines():
+        if not line.strip():
+            continue  # for /f пропускает пустые строки
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        if key == "mode":
+            mode = value.strip().lower()
+        elif key == "all":
+            mode = "all"
+        elif key == "udp":
+            if value.strip():
+                udp_candidate = value.strip()
+            else:
+                mode = "udp"
+        elif key == "tcp":
+            if value.strip():
+                tcp_candidate = value.strip()
+            else:
+                mode = "tcp"
+
+    tcp_range = _validate_game_range(tcp_candidate) or tcp_range
+    udp_range = _validate_game_range(udp_candidate) or udp_range
+
+    if mode == "all":
+        return {"GameFilter": tcp_range, "GameFilterTCP": tcp_range, "GameFilterUDP": udp_range}
+    if mode == "tcp":
+        return {"GameFilter": tcp_range, "GameFilterTCP": tcp_range, "GameFilterUDP": "12"}
+    if mode == "udp":
+        return {"GameFilter": udp_range, "GameFilterTCP": "12", "GameFilterUDP": udp_range}
+    return dict(disabled)
 
 
 def expand_batch_variables(text: str, variables: dict[str, str]) -> str:
@@ -288,6 +342,27 @@ def expand_batch_variables(text: str, variables: dict[str, str]) -> str:
         return variables.get(match.group(1).strip().lower(), "")
 
     return _BATCH_VAR_RE.sub(replace, text)
+
+
+def _unescape_carets(token: str) -> str:
+    """Снимает cmd-экранирование с токена: ``^!`` -> ``!``, ``^^`` -> ``^``.
+
+    В .bat-стратегиях значение пишется с кареткой, потому что ``!`` ломает
+    ``set`` при отложенном раскрытии::
+
+        --dpi-desync-fake-tls=^!
+
+    cmd снимает каретку перед запуском winws.exe, поэтому winws получает
+    ``!`` — в его справке это допустимое значение
+    (``--dpi-desync-fake-tls=[+ofs]@<filename>|0xHEX|![+offset]``). Если
+    каретку не снять, winws считает ``^!`` именем файла, не находит его и
+    завершается с «could not read ^!» — служба стартует и сразу падает.
+
+    Внутри двойных кавычек cmd каретку не трогает, такие токены не меняются.
+    """
+    if token.startswith('"') or "^" not in token:
+        return token
+    return re.sub(r"\^(.)", r"\1", token)
 
 
 def _quote_argument(arg: str, root: str) -> str:
@@ -314,7 +389,7 @@ def reassemble_args(tokens: Sequence[str], zapret_path: Path) -> str:
         # Каретки-переносы строк в батнике — просто выбрасываются.
         if token in ("^", "^^"):
             continue
-        arg = _quote_argument(token, root)
+        arg = _quote_argument(_unescape_carets(token), root)
 
         if arg.startswith("--") and merge_args != 0:
             merge_args = 0
